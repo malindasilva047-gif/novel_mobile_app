@@ -3,6 +3,7 @@ class AppBootstrap {
     required this.discoverTabs,
     required this.recentlyUpdated,
     required this.recentlyCompleted,
+    required this.discoverBooks,
     required this.featuredBook,
     required this.exploreTopics,
     required this.libraryEntries,
@@ -16,6 +17,7 @@ class AppBootstrap {
   final List<String> discoverTabs;
   final List<BookCardModel> recentlyUpdated;
   final List<BookCardModel> recentlyCompleted;
+  final List<BookCardModel> discoverBooks;
   final BookDetailModel featuredBook;
   final List<ExploreTopicModel> exploreTopics;
   final List<LibraryEntryModel> libraryEntries;
@@ -32,6 +34,9 @@ class AppBootstrap {
           .map((item) => BookCardModel.fromMap(item as Map<String, dynamic>))
           .toList(),
       recentlyCompleted: (map['recently_completed'] as List<dynamic>)
+          .map((item) => BookCardModel.fromMap(item as Map<String, dynamic>))
+          .toList(),
+      discoverBooks: (map['discover_books'] as List<dynamic>? ?? <dynamic>[])
           .map((item) => BookCardModel.fromMap(item as Map<String, dynamic>))
           .toList(),
       featuredBook: BookDetailModel.fromMap(
@@ -76,6 +81,14 @@ class BookCardModel {
     required this.author,
     required this.coverPath,
     required this.accentHex,
+    required this.description,
+    required this.statusText,
+    required this.rating,
+    required this.primaryGenre,
+    required this.secondaryGenre,
+    required this.sectionName,
+    required this.isCompleted,
+    required this.cta,
   });
 
   final int id;
@@ -83,6 +96,14 @@ class BookCardModel {
   final String author;
   final String coverPath;
   final String accentHex;
+  final String description;
+  final String statusText;
+  final double rating;
+  final String primaryGenre;
+  final String secondaryGenre;
+  final String sectionName;
+  final bool isCompleted;
+  final String cta;
 
   factory BookCardModel.fromMap(Map<String, dynamic> map) {
     return BookCardModel(
@@ -91,6 +112,15 @@ class BookCardModel {
       author: map['author'] as String? ?? '',
       coverPath: map['cover_path'] as String? ?? '',
       accentHex: map['accent_hex'] as String? ?? '#A1A1A1',
+      description: map['description'] as String? ?? '',
+      statusText: map['status_text'] as String? ?? '',
+      rating: ((map['rating'] as num?) ?? 0).toDouble(),
+      primaryGenre:
+          map['primary_genre'] as String? ?? map['genre'] as String? ?? '',
+      secondaryGenre: map['secondary_genre'] as String? ?? '',
+      sectionName: map['section_name'] as String? ?? '',
+      isCompleted: (map['is_completed'] as num?) == 1,
+      cta: map['cta_label'] as String? ?? map['cta'] as String? ?? 'Read now',
     );
   }
 }

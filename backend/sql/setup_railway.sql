@@ -1,6 +1,3 @@
-DROP DATABASE IF EXISTS novel_app_db;
-CREATE DATABASE novel_app_db;
-USE novel_app_db;
 
 CREATE TABLE categories (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -108,6 +105,8 @@ INSERT INTO categories (name, topic_count, tab_group, sort_order) VALUES
 ('Popular', 0, 'discover', 2),
 ('Fanfiction', 0, 'discover', 3),
 ('Newsfeed', 0, 'discover', 4),
+('Editor\'s Picks', 0, 'discover', 5),
+('Rising', 0, 'discover', 6),
 ('Fanfiction', 100, 'explore', 1),
 ('Fantasy', 31, 'explore', 2),
 ('Poetry', 14, 'explore', 3),
@@ -121,7 +120,10 @@ INSERT INTO categories (name, topic_count, tab_group, sort_order) VALUES
 ('Erotica', 32, 'explore', 11),
 ('Mystery', 32, 'explore', 12),
 ('SciFi', 31, 'explore', 13),
-('Humor', 24, 'explore', 14);
+('Humor', 24, 'explore', 14),
+('Drama', 28, 'explore', 15),
+('Romance', 41, 'explore', 16),
+('Paranormal', 19, 'explore', 17);
 
 INSERT INTO books (title, author, description, cover_path, accent_hex, section_name, status_text, rating, genre, cta_label, sort_order) VALUES
 ('Reclaimed by the Alpha: The Alpha''s Hidden Heir', 'L. Cross', 'Six years ago, Nick Blackwood broke my heart on Christmas morning when he believed a lie that destroyed us both. I disappeared, rebuilt my life, and raised his daughter alone.', 'story_card_images/006575b1-f6b5-49b2-b3a4-6a9ef1a1e02e.jpg', '#A06054', 'featured', '2hr ago', 5.0, 'Romance', 'Read now', 1),
@@ -133,7 +135,13 @@ INSERT INTO books (title, author, description, cover_path, accent_hex, section_n
 ('What Now?', 'Angela Lawece', 'Emotional drama complete novel.', 'story_card_images/6a5c2a85-2d8c-498d-9153-1d72ec4005e4.jpg', '#C69595', 'recently_completed', 'Completed', 4.5, 'Drama', 'Read now', 6),
 ('Perpromenos', 'Koyar Kora', 'Mythic green cover drama.', 'story_card_images/7d7d5cc8-5b0a-4821-9e57-3f58c36998b0.jpg', '#8E9877', 'recently_completed', 'Completed', 4.4, 'Literary Fiction', 'Read now', 7),
 ('Owned by the Lycan King (18+)', 'E.F BONI', 'Currently in user library.', 'story_card_images/8de846ae-c1cc-4e8b-a52e-e8aa48b6abb1.jpg', '#8B523C', 'recently_completed', 'Completed', 4.8, 'Romance', 'Read now', 8),
-('Lune', 'Angela Lawece', 'Moonlit fantasy sci-fi.', 'story_card_images/9e84fd30-5477-45f2-8c48-5c290f275856.jpg', '#66738D', 'recently_completed', '2wk ago', 4.2, 'Fantasy', 'Read now', 9);
+('Lune', 'Angela Lawece', 'Moonlit fantasy sci-fi.', 'story_card_images/9e84fd30-5477-45f2-8c48-5c290f275856.jpg', '#66738D', 'recently_completed', '2wk ago', 4.2, 'Fantasy', 'Read now', 9),
+('Echoes of Us: Second Chance Romance', 'M. Dorian', 'A heartfelt second-chance love story between two former rivals.', 'story_card_images/story2.jpg', '#E86C9F', 'recently_updated', '45m ago', 4.6, 'Romance', 'Read now', 10),
+('Scent of Another Alpha', 'A. Virel', 'After rejection and exile, she returns stronger than ever.', 'story_card_images/story3.jpg', '#8B4513', 'recently_updated', '10m ago', 4.9, 'Paranormal', 'Read now', 11),
+('Conquering My Stepmother', 'K. Aris', 'A reincarnated anti-hero rises through a brutal cultivation world.', 'story_card_images/story4.jpg', '#7B68EE', 'recently_updated', '1d ago', 4.5, 'Fantasy', 'Read now', 12),
+('Say You Are Mine', 'Nora Vale', 'A one-night encounter turns into a relentless emotional war.', 'story_card_images/story5.jpg', '#E86C9F', 'recently_completed', 'Completed', 4.9, 'Romance', 'Read now', 13),
+('The Cedar House', 'J. Porter', 'A return home reopens old wounds and unforgettable chemistry.', 'story_card_images/story12.jpg', '#E86C9F', 'recently_completed', 'Completed', 4.6, 'Drama', 'Read now', 14),
+('Haven House', 'M. Hartwell', 'A gothic mystery in an old manor where every door has a secret.', 'story_card_images/story14.jpg', '#2F4F4F', 'recently_updated', '3h ago', 4.7, 'Mystery', 'Read now', 15);
 
 INSERT INTO library_entries (book_id, reading_status, updated_text, chapters, primary_genre, secondary_genre, sort_order) VALUES
 (8, 'Completed', '31 Chapters', 31, 'Romance', 'Erotica', 1),

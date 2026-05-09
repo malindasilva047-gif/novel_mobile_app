@@ -1,0 +1,657 @@
+import 'package:flutter/material.dart';
+import '../../core/theme/app_theme.dart';
+import '../../data/models/app_bootstrap.dart';
+import '../../data/services/api_service.dart';
+
+class LibraryScreen extends StatefulWidget {
+  const LibraryScreen({
+    super.key,
+    required this.data,
+    required this.apiService,
+  });
+
+  final AppBootstrap data;
+  final ApiService apiService;
+
+  @override
+  State<LibraryScreen> createState() => _LibraryScreenState();
+}
+
+class _LibraryScreenState extends State<LibraryScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  late List<LibraryEntryModel> _entries;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+    _entries = List<LibraryEntryModel>.from(widget.data.libraryEntries);
+    _loadEntries();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadEntries() async {
+    setState(() {
+      _loading = true;
+    });
+    final rows = await widget.apiService.fetchLibraryEntries();
+    if (!mounted) return;
+    setState(() {
+      _entries = rows.map((row) => LibraryEntryModel.fromMap(row)).toList();
+      _loading = false;
+    });
+  }
+
+  Future<void> _removeEntry(LibraryEntryModel entry) async {
+    final rows = await widget.apiService.fetchLibraryEntries();
+    int? entryId;
+    for (final row in rows) {
+      final book = row['book'] as Map<String, dynamic>;
+      if (book['id'] == entry.book.id) {
+        entryId = row['id'] as int;
+        break;
+      }
+    }
+    if (entryId == null) return;
+    await widget.apiService.deleteLibraryEntry(entryId);
+    if (mounted) {
+      _loadEntries();
+    }
+  }
+
+  Future<void> _changeStatus(LibraryEntryModel entry) async {
+    final rows = await widget.apiService.fetchLibraryEntries();
+    int? entryId;
+    for (final row in rows) {
+      final book = row['book'] as Map<String, dynamic>;
+      if (book['id'] == entry.book.id) {
+        entryId = row['id'] as int;
+        break;
+      }
+    }
+    if (entryId == null) return;
+
+    final nextStatus = entry.readingStatus.toLowerCase() == 'completed'
+        ? 'Reading'
+        : 'Completed';
+
+    await widget.apiService.updateLibraryEntry(entryId, {
+      'reading_status': nextStatus,
+      'updated_text': entry.updatedText,
+      'chapters': entry.chapters,
+      'primary_genre': entry.primaryGenre,
+      'secondary_genre': entry.secondaryGenre,
+    });
+    if (mounted) {
+      _loadEntries();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 16),
+          child: Text(
+            'Library',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontSize: 26,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+
+        // Tabs
+        TabBar(
+          controller: _tabController,
+          labelColor: AppTheme.brand,
+          unselectedLabelColor: AppTheme.muted,
+          indicatorColor: AppTheme.brand,
+          labelStyle: Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+          tabs: const [
+            Tab(text: 'Current Reads'),
+            Tab(text: 'Reading Lists'),
+            Tab(text: 'History'),
+          ],
+        ),
+
+        // Tab content
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              // Current Reads
+              _CurrentReadsTab(
+                entries: _entries,
+                loading: _loading,
+                onDelete: _removeEntry,
+                onToggleStatus: _changeStatus,
+              ),
+
+              // Reading Lists
+              _ReadingListsTab(lists: widget.data.profile.readingLists),
+
+              // History
+              _HistoryTab(entries: _entries),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CurrentReadsTab extends StatelessWidget {
+  const _CurrentReadsTab({
+    required this.entries,
+    required this.loading,
+    required this.onDelete,
+    required this.onToggleStatus,
+  });
+
+  final List<LibraryEntryModel> entries;
+  final bool loading;
+  final ValueChanged<LibraryEntryModel> onDelete;
+  final ValueChanged<LibraryEntryModel> onToggleStatus;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
+      children: [
+        Text(
+          'My Books',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 18),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 80),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (entries.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 40),
+            child: Center(
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.menu_book_outlined,
+                    size: 48,
+                    color: AppTheme.muted.withValues(alpha: 0.5),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No books in your library yet',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyLarge?.copyWith(color: AppTheme.muted),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          ...entries.map(
+            (entry) => _LibraryEntryTile(
+              entry: entry,
+              onDelete: () => onDelete(entry),
+              onToggleStatus: () => onToggleStatus(entry),
+            ),
+          ),
+        const SizedBox(height: 26),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () {
+              // Navigate to discover screen
+            },
+            icon: const Icon(Icons.auto_stories_outlined),
+            label: const Text('Discover more stories'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReadingListsTab extends StatelessWidget {
+  const _ReadingListsTab({required this.lists});
+
+  final List<ReadingListModel> lists;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
+      children: [
+        Text(
+          'Private Reading Lists',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 18),
+        if (lists.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 40),
+            child: Center(
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.library_books_outlined,
+                    size: 48,
+                    color: AppTheme.muted.withValues(alpha: 0.5),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No reading lists yet',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyLarge?.copyWith(color: AppTheme.muted),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          ...lists.asMap().entries.map(
+            (entry) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _ReadingListRowCard(list: entry.value, index: entry.key),
+            ),
+          ),
+        const SizedBox(height: 26),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () {
+              // Show create reading list dialog
+            },
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Create New List'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HistoryTab extends StatelessWidget {
+  const _HistoryTab({required this.entries});
+
+  final List<LibraryEntryModel> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 30),
+      children: [
+        Text(
+          'Reading History',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 18),
+        if (entries.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 40),
+            child: Center(
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.history_outlined,
+                    size: 48,
+                    color: AppTheme.muted.withValues(alpha: 0.5),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Your reading history appears here',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyLarge?.copyWith(color: AppTheme.muted),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          ...entries
+              .where(
+                (entry) =>
+                    entry.readingStatus.toLowerCase().contains('completed') ||
+                    entry.readingStatus.toLowerCase().contains('ago'),
+              )
+              .map(
+                (entry) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _HistoryEntryCard(entry: entry),
+                ),
+              ),
+      ],
+    );
+  }
+}
+
+class _HistoryEntryCard extends StatelessWidget {
+  const _HistoryEntryCard({required this.entry});
+
+  final LibraryEntryModel entry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: const Color(0xFFE8E8E8)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: 42,
+              height: 58,
+              child: entry.book.coverPath.isNotEmpty
+                  ? Image.asset(entry.book.coverPath, fit: BoxFit.cover)
+                  : const ColoredBox(color: Color(0xFFE4E4E4)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.book.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'by ${entry.book.author}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${entry.updatedText}  •  ${entry.primaryGenre}',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.more_vert_rounded, size: 18, color: AppTheme.muted),
+        ],
+      ),
+    );
+  }
+}
+
+class _LibraryEntryTile extends StatelessWidget {
+  const _LibraryEntryTile({
+    required this.entry,
+    required this.onDelete,
+    required this.onToggleStatus,
+  });
+
+  final LibraryEntryModel entry;
+  final VoidCallback onDelete;
+  final VoidCallback onToggleStatus;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _hexToColor(entry.book.accentHex);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Book cover
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: SizedBox(
+              width: 70,
+              height: 100,
+              child: entry.book.coverPath.isNotEmpty
+                  ? Image.asset(
+                      entry.book.coverPath,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) =>
+                          _BookCoverFallback(color: color),
+                    )
+                  : _BookCoverFallback(color: color),
+            ),
+          ),
+          const SizedBox(width: 14),
+
+          // Book info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.book.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontSize: 16,
+                    fontFamily: 'serif',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'by ${entry.book.author}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF555555),
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Status and metadata
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    // Reading status
+                    if (entry.readingStatus.toLowerCase() == 'completed')
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.done_all_rounded,
+                            color: AppTheme.brand,
+                            size: 14,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Completed',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: AppTheme.brand, fontSize: 12),
+                          ),
+                        ],
+                      )
+                    else
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.access_time,
+                            color: AppTheme.muted,
+                            size: 14,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            entry.readingStatus,
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodySmall?.copyWith(fontSize: 12),
+                          ),
+                        ],
+                      ),
+
+                    // Chapters
+                    Text(
+                      '${entry.chapters} Chapters',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF555555),
+                        fontSize: 12,
+                      ),
+                    ),
+
+                    // Primary genre
+                    if (entry.primaryGenre.isNotEmpty)
+                      Text(
+                        entry.primaryGenre,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF555555),
+                          fontSize: 12,
+                        ),
+                      ),
+
+                    // Secondary genre
+                    if (entry.secondaryGenre.isNotEmpty)
+                      Text(
+                        entry.secondaryGenre,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF555555),
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // More options
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'status') {
+                onToggleStatus();
+              } else if (value == 'delete') {
+                onDelete();
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'status', child: Text('Toggle Status')),
+              PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+            icon: const Icon(Icons.more_vert_rounded, color: AppTheme.brand),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadingListRowCard extends StatelessWidget {
+  const _ReadingListRowCard({required this.list, required this.index});
+
+  final ReadingListModel list;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F8F8),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E5E5)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 38,
+            height: 38,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: list.coverPath.isNotEmpty
+                  ? Image.asset(
+                      list.coverPath,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) =>
+                          const ColoredBox(color: Color(0xFFDDDDDD)),
+                    )
+                  : const ColoredBox(color: Color(0xFFDDDDDD)),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  list.name,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${list.storyCount} stories',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppTheme.muted),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right_rounded, color: AppTheme.muted),
+        ],
+      ),
+    );
+  }
+}
+
+class _BookCoverFallback extends StatelessWidget {
+  const _BookCoverFallback({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [color, Color.lerp(color, Colors.black, 0.3) ?? color],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+    );
+  }
+}
+
+Color _hexToColor(String hex) {
+  final normalized = hex.replaceAll('#', '');
+  return Color(int.parse('FF$normalized', radix: 16));
+}

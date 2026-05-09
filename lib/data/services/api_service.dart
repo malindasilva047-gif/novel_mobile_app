@@ -39,6 +39,124 @@ class ApiService {
     return AppBootstrap.fromMap(_fallbackData);
   }
 
+  Future<List<Map<String, dynamic>>> fetchNotifications({String? tab}) async {
+    final uri = Uri.parse('$_baseUrl/api/notifications').replace(
+      queryParameters: {if (tab != null && tab.trim().isNotEmpty) 'tab': tab},
+    );
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 7));
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        return List<Map<String, dynamic>>.from(
+          payload['items'] as List<dynamic>,
+        );
+      }
+    } catch (_) {}
+
+    final fallback = (_fallbackData['notifications'] as List<dynamic>)
+        .where((item) {
+          if (tab == null || tab.trim().isEmpty) return true;
+          return (item as Map<String, dynamic>)['tab'] == tab;
+        })
+        .map((item) => Map<String, dynamic>.from(item as Map<String, dynamic>))
+        .toList();
+    return fallback;
+  }
+
+  Future<List<Map<String, dynamic>>> searchStories({
+    String query = '',
+    String genre = '',
+    double minRating = 0,
+  }) async {
+    final uri = Uri.parse('$_baseUrl/api/search').replace(
+      queryParameters: {
+        'query': query,
+        'genre': genre,
+        'min_rating': minRating.toString(),
+      },
+    );
+    final response = await http.get(uri).timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+  }
+
+  Future<List<Map<String, dynamic>>> fetchLibraryEntries() async {
+    final response = await http
+        .get(Uri.parse('$_baseUrl/api/library'))
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+  }
+
+  Future<void> addLibraryEntry(Map<String, dynamic> payload) async {
+    await http
+        .post(
+          Uri.parse('$_baseUrl/api/library'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+  }
+
+  Future<void> updateLibraryEntry(int id, Map<String, dynamic> payload) async {
+    await http
+        .put(
+          Uri.parse('$_baseUrl/api/library/$id'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+  }
+
+  Future<void> deleteLibraryEntry(int id) async {
+    await http
+        .delete(Uri.parse('$_baseUrl/api/library/$id'))
+        .timeout(const Duration(seconds: 8));
+  }
+
+  Future<List<Map<String, dynamic>>> fetchWriterStories() async {
+    final response = await http
+        .get(Uri.parse('$_baseUrl/api/write/stories'))
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+  }
+
+  Future<void> createWriterStory(Map<String, dynamic> payload) async {
+    await http
+        .post(
+          Uri.parse('$_baseUrl/api/write/stories'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+  }
+
+  Future<void> updateWriterStory(int id, Map<String, dynamic> payload) async {
+    await http
+        .put(
+          Uri.parse('$_baseUrl/api/write/stories/$id'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+  }
+
+  Future<void> deleteWriterStory(int id) async {
+    await http
+        .delete(Uri.parse('$_baseUrl/api/write/stories/$id'))
+        .timeout(const Duration(seconds: 8));
+  }
+
   static final Map<String, dynamic> _fallbackData = <String, dynamic>{
     'discover_tabs': ['New', 'Popular', 'Fanfiction', 'Newsfeed'],
     'recently_updated': [
@@ -99,6 +217,110 @@ class ApiService {
         'cover_path':
             'story_card_images/7d7d5cc8-5b0a-4821-9e57-3f58c36998b0.jpg',
         'accent_hex': '#8E9877',
+      },
+    ],
+    'discover_books': [
+      {
+        'id': 1,
+        'title': 'Reclaimed by the Alpha',
+        'author': 'L. Cross',
+        'description': 'A second chance romance with a dangerous secret heir.',
+        'cover_path':
+            'story_card_images/006575b1-f6b5-49b2-b3a4-6a9ef1a1e02e.jpg',
+        'accent_hex': '#A06054',
+        'section_name': 'recently_updated',
+        'status_text': '2hr ago',
+        'rating': 5.0,
+        'genre': 'Romance',
+        'primary_genre': 'Romance',
+        'secondary_genre': 'Drama',
+        'is_completed': 0,
+        'cta_label': 'Read now',
+      },
+      {
+        'id': 2,
+        'title': 'The Unexpected Prisoner',
+        'author': 'SpicySammy',
+        'description':
+            'A fantasy romance trapped between politics and prophecy.',
+        'cover_path':
+            'story_card_images/04d68518-aafb-497e-995e-10bc6e4bef90.jpg',
+        'accent_hex': '#7661A8',
+        'section_name': 'recently_updated',
+        'status_text': '1hr ago',
+        'rating': 4.8,
+        'genre': 'Fantasy',
+        'primary_genre': 'Fantasy',
+        'secondary_genre': 'Romance',
+        'is_completed': 0,
+        'cta_label': 'Read now',
+      },
+      {
+        'id': 3,
+        'title': 'The Silence of Shadows',
+        'author': 'Kurt Brunnhuber',
+        'description':
+            'A complete dark fantasy novel about a city with no sun.',
+        'cover_path':
+            'story_card_images/6290b4c8-83e9-4d5d-a740-06d4ec94d335.jpg',
+        'accent_hex': '#674C6B',
+        'section_name': 'recently_completed',
+        'status_text': 'Completed',
+        'rating': 4.8,
+        'genre': 'Fantasy',
+        'primary_genre': 'Fantasy',
+        'secondary_genre': 'Mystery',
+        'is_completed': 1,
+        'cta_label': 'Read now',
+      },
+      {
+        'id': 4,
+        'title': 'Goddess Tamer',
+        'author': 'Ari Nova',
+        'description':
+            'A reborn hero must tame a dangerous goddess to survive.',
+        'cover_path': 'story_card_images/story15.jpg',
+        'accent_hex': '#7F74C1',
+        'section_name': 'recently_completed',
+        'status_text': 'Completed',
+        'rating': 4.9,
+        'genre': 'Adventure',
+        'primary_genre': 'Adventure',
+        'secondary_genre': 'Fantasy',
+        'is_completed': 1,
+        'cta_label': 'Read now',
+      },
+      {
+        'id': 5,
+        'title': 'Demon King Leveling System',
+        'author': 'J. Ard',
+        'description': 'A modern student unlocks an infernal leveling system.',
+        'cover_path': 'story_card_images/story3.jpg',
+        'accent_hex': '#3F6FA0',
+        'section_name': 'recently_updated',
+        'status_text': '5m ago',
+        'rating': 4.7,
+        'genre': 'Fantasy',
+        'primary_genre': 'Fantasy',
+        'secondary_genre': 'Action',
+        'is_completed': 0,
+        'cta_label': 'Read now',
+      },
+      {
+        'id': 6,
+        'title': 'The Apex Transfer',
+        'author': 'Elena Torres',
+        'description': 'An outlier discovers she carries royal wolf blood.',
+        'cover_path': 'story_card_images/story4.jpg',
+        'accent_hex': '#7B5D56',
+        'section_name': 'recently_completed',
+        'status_text': 'Completed',
+        'rating': 5.0,
+        'genre': 'Fantasy',
+        'primary_genre': 'Fantasy',
+        'secondary_genre': 'Paranormal',
+        'is_completed': 1,
+        'cta_label': 'Read now',
       },
     ],
     'featured_book': {

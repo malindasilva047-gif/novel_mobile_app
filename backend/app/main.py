@@ -1,11 +1,20 @@
 from collections import defaultdict
+import logging
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+import mysql.connector
+from pydantic import BaseModel
 
-from .database import get_connection
+from .database import (
+    get_connection,
+    initialize_database_if_needed,
+    run_startup_migrations,
+)
 
 app = FastAPI(title="Novel Mobile Backend")
+LOGGER = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,7 +25,172 @@ app.add_middleware(
 )
 
 
-def fetch_all(query: str, params=None):
+class LibraryCreateRequest(BaseModel):
+    book_id: int
+    reading_status: str
+    updated_text: str = ""
+    chapters: int = 0
+    primary_genre: str = ""
+    secondary_genre: str = ""
+
+
+class LibraryUpdateRequest(BaseModel):
+    reading_status: str | None = None
+    updated_text: str | None = None
+    chapters: int | None = None
+    primary_genre: str | None = None
+    secondary_genre: str | None = None
+
+
+class StoryCreateRequest(BaseModel):
+    title: str
+    author: str
+    description: str
+    genre: str
+
+
+class StoryUpdateRequest(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    description: str | None = None
+    genre: str | None = None
+
+
+class CategoryCreateRequest(BaseModel):
+    name: str
+    topic_count: int = 0
+    tab_group: str
+    sort_order: int = 0
+
+
+class CategoryUpdateRequest(BaseModel):
+    name: str | None = None
+    topic_count: int | None = None
+    tab_group: str | None = None
+    sort_order: int | None = None
+
+
+class AdminBookCreateRequest(BaseModel):
+    title: str
+    author: str
+    description: str
+    cover_path: str = ""
+    accent_hex: str = "#808080"
+    section_name: str = "recently_updated"
+    status_text: str = "Draft"
+    rating: float = 0.0
+    genre: str = ""
+    cta_label: str = "Read now"
+    sort_order: int = 999
+
+
+class AdminBookUpdateRequest(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    description: str | None = None
+    cover_path: str | None = None
+    accent_hex: str | None = None
+    section_name: str | None = None
+    status_text: str | None = None
+    rating: float | None = None
+    genre: str | None = None
+    cta_label: str | None = None
+    sort_order: int | None = None
+
+
+class AdminNotificationCreateRequest(BaseModel):
+    tab_name: str
+    title: str
+    message: str
+    created_at: str
+    sort_order: int = 999
+
+
+class AdminNotificationUpdateRequest(BaseModel):
+    tab_name: str | None = None
+    title: str | None = None
+    message: str | None = None
+    created_at: str | None = None
+    sort_order: int | None = None
+
+
+class AdminMenuItemCreateRequest(BaseModel):
+    section_name: str
+    section_order: int
+    label: str
+    icon_name: str
+    route_name: str
+    sort_order: int = 999
+
+
+class AdminMenuItemUpdateRequest(BaseModel):
+    section_name: str | None = None
+    section_order: int | None = None
+    label: str | None = None
+    icon_name: str | None = None
+    route_name: str | None = None
+    sort_order: int | None = None
+
+
+class AdminWriteScreenUpdateRequest(BaseModel):
+    manage_tabs: str
+    story_tabs: str
+    filter_label: str
+    sort_label: str
+    empty_title: str
+    empty_cta: str
+
+
+class AdminProfileUpdateRequest(BaseModel):
+    display_name: str
+    username: str
+    following: int
+    followers: int
+    blocked: int
+    chapters_read: int
+    social_karma: int
+    day_streak: int
+
+
+class AdminReadingListCreateRequest(BaseModel):
+    profile_id: int = 1
+    name: str
+    story_count: int = 0
+    cover_path: str = ""
+    sort_order: int = 999
+
+
+class AdminReadingListUpdateRequest(BaseModel):
+    profile_id: int | None = None
+    name: str | None = None
+    story_count: int | None = None
+    cover_path: str | None = None
+    sort_order: int | None = None
+
+
+class AdminAchievementCreateRequest(BaseModel):
+    group_name: str
+    group_order: int
+    title: str
+    subtitle: str
+    progress_label: str
+    badge_value: str
+    style: str
+    sort_order: int = 999
+
+
+class AdminAchievementUpdateRequest(BaseModel):
+    group_name: str | None = None
+    group_order: int | None = None
+    title: str | None = None
+    subtitle: str | None = None
+    progress_label: str | None = None
+    badge_value: str | None = None
+    style: str | None = None
+    sort_order: int | None = None
+
+
+def fetch_all(query: str, params: tuple[Any, ...] | None = None):
     connection = get_connection()
     cursor = connection.cursor(dictionary=True)
     cursor.execute(query, params or ())
@@ -26,9 +200,33 @@ def fetch_all(query: str, params=None):
     return rows
 
 
+def execute_write(query: str, params: tuple[Any, ...]):
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(query, params)
+    connection.commit()
+    last_id = cursor.lastrowid
+    affected = cursor.rowcount
+    cursor.close()
+    connection.close()
+    return last_id, affected
+
+
 @app.get("/")
 def healthcheck():
     return {"message": "Novel Mobile backend is running."}
+
+
+@app.on_event("startup")
+def startup_initialize_database():
+    try:
+        initialized = initialize_database_if_needed()
+        migration_report = run_startup_migrations()
+        if initialized:
+            LOGGER.info("Database tables were missing. Schema/data initialized automatically.")
+        LOGGER.info("Startup migrations: %s", migration_report)
+    except (mysql.connector.Error, FileNotFoundError, OSError, ValueError) as exc:
+        LOGGER.exception("Automatic database initialization failed: %s", exc)
 
 
 @app.get("/api/bootstrap")
@@ -47,7 +245,10 @@ def bootstrap():
     books = fetch_all(
         """
         SELECT id, title, author, description, cover_path, accent_hex, section_name,
-               status_text, rating, genre, cta_label
+               status_text, rating, genre, cta_label,
+               COALESCE(primary_genre, genre) AS primary_genre,
+               COALESCE(secondary_genre, '') AS secondary_genre,
+               COALESCE(is_completed, 0) AS is_completed
         FROM books
         ORDER BY sort_order
         """
@@ -77,7 +278,11 @@ def bootstrap():
         if book["section_name"] == "recently_completed"
     ]
 
-    featured_raw = next(book for book in books if book["section_name"] == "featured")
+    featured_candidates = [b for b in books if b["section_name"] == "featured"]
+    if not featured_candidates:
+        raise HTTPException(status_code=500, detail="No featured book configured")
+
+    featured_raw = featured_candidates[0]
     featured_book = {
         "id": featured_raw["id"],
         "title": featured_raw["title"],
@@ -91,18 +296,19 @@ def bootstrap():
 
     library_entries = fetch_all(
         """
-        SELECT le.reading_status, le.updated_text, le.chapters, le.primary_genre,
-               le.secondary_genre, b.id, b.title, b.author, b.cover_path, b.accent_hex
+        SELECT le.id, le.reading_status, le.updated_text, le.chapters, le.primary_genre,
+               le.secondary_genre, b.id AS book_id, b.title, b.author, b.cover_path, b.accent_hex
         FROM library_entries le
         JOIN books b ON b.id = le.book_id
-        ORDER BY le.sort_order
+        ORDER BY le.sort_order, le.id
         """
     )
 
     library_payload = [
         {
+            "id": row["id"],
             "book": {
-                "id": row["id"],
+                "id": row["book_id"],
                 "title": row["title"],
                 "author": row["author"],
                 "cover_path": row["cover_path"],
@@ -117,7 +323,13 @@ def bootstrap():
         for row in library_entries
     ]
 
-    write_meta = fetch_all("SELECT manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta FROM write_screen LIMIT 1")[0]
+    write_meta_rows = fetch_all(
+        "SELECT manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta FROM write_screen LIMIT 1"
+    )
+    if not write_meta_rows:
+        raise HTTPException(status_code=500, detail="Write metadata is missing")
+
+    write_meta = write_meta_rows[0]
     write_screen = {
         "manage_tabs": write_meta["manage_tabs"].split(","),
         "story_tabs": write_meta["story_tabs"].split(","),
@@ -149,9 +361,13 @@ def bootstrap():
         for section, items in menu_map.items()
     ]
 
-    profile = fetch_all(
+    profile_rows = fetch_all(
         "SELECT display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak FROM profiles LIMIT 1"
-    )[0]
+    )
+    if not profile_rows:
+        raise HTTPException(status_code=500, detail="Profile is missing")
+
+    profile = profile_rows[0]
     reading_lists = fetch_all(
         "SELECT name, story_count, cover_path FROM reading_lists ORDER BY sort_order"
     )
@@ -189,6 +405,7 @@ def bootstrap():
         "discover_tabs": discover_tabs,
         "recently_updated": recently_updated,
         "recently_completed": recently_completed,
+        "discover_books": books,
         "featured_book": featured_book,
         "explore_topics": explore_topics,
         "library_entries": library_payload,
@@ -198,3 +415,692 @@ def bootstrap():
         "profile": profile_payload,
         "achievements": achievements,
     }
+
+
+@app.get("/api/search")
+def search_stories(
+    query: str = Query(default=""),
+    genre: str = Query(default=""),
+    min_rating: float = Query(default=0.0),
+    limit: int = Query(default=40, ge=1, le=100),
+):
+    q = "%" + query.strip() + "%"
+    g = "%" + genre.strip() + "%"
+    rows = fetch_all(
+        """
+        SELECT id, title, author, description, cover_path, accent_hex, status_text, rating, genre
+        FROM books
+        WHERE (title LIKE %s OR author LIKE %s)
+          AND genre LIKE %s
+          AND rating >= %s
+        ORDER BY rating DESC, id DESC
+        LIMIT %s
+        """,
+        (q, q, g, min_rating, limit),
+    )
+    return {"items": rows}
+
+
+@app.get("/api/notifications")
+def get_notifications(tab: str = Query(default="")):
+    if tab.strip():
+        rows = fetch_all(
+            "SELECT tab_name AS tab, title, message, created_at FROM notifications WHERE LOWER(tab_name)=LOWER(%s) ORDER BY sort_order",
+            (tab.strip(),),
+        )
+    else:
+        rows = fetch_all(
+            "SELECT tab_name AS tab, title, message, created_at FROM notifications ORDER BY sort_order"
+        )
+    return {"items": rows}
+
+
+@app.get("/api/library")
+def get_library_entries():
+    rows = fetch_all(
+        """
+        SELECT le.id, le.reading_status, le.updated_text, le.chapters, le.primary_genre,
+               le.secondary_genre, b.id AS book_id, b.title, b.author, b.cover_path, b.accent_hex
+        FROM library_entries le
+        JOIN books b ON b.id = le.book_id
+        ORDER BY le.sort_order, le.id
+        """
+    )
+    return {
+        "items": [
+            {
+                "id": row["id"],
+                "book": {
+                    "id": row["book_id"],
+                    "title": row["title"],
+                    "author": row["author"],
+                    "cover_path": row["cover_path"],
+                    "accent_hex": row["accent_hex"],
+                },
+                "reading_status": row["reading_status"],
+                "updated_text": row["updated_text"],
+                "chapters": row["chapters"],
+                "primary_genre": row["primary_genre"],
+                "secondary_genre": row["secondary_genre"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/library")
+def create_library_entry(payload: LibraryCreateRequest):
+    _, affected = execute_write(
+        """
+        INSERT INTO library_entries (book_id, reading_status, updated_text, chapters, primary_genre, secondary_genre, sort_order)
+        VALUES (%s, %s, %s, %s, %s, %s, 999)
+        """,
+        (
+            payload.book_id,
+            payload.reading_status,
+            payload.updated_text,
+            payload.chapters,
+            payload.primary_genre,
+            payload.secondary_genre,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to create library entry")
+    return {"ok": True}
+
+
+@app.put("/api/library/{entry_id}")
+def update_library_entry(entry_id: int, payload: LibraryUpdateRequest):
+    current_rows = fetch_all("SELECT * FROM library_entries WHERE id=%s", (entry_id,))
+    if not current_rows:
+        raise HTTPException(status_code=404, detail="Library entry not found")
+
+    current = current_rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE library_entries
+        SET reading_status=%s,
+            updated_text=%s,
+            chapters=%s,
+            primary_genre=%s,
+            secondary_genre=%s
+        WHERE id=%s
+        """,
+        (
+            payload.reading_status or current["reading_status"],
+            payload.updated_text or current["updated_text"],
+            payload.chapters if payload.chapters is not None else current["chapters"],
+            payload.primary_genre or current["primary_genre"],
+            payload.secondary_genre or current["secondary_genre"],
+            entry_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update library entry")
+    return {"ok": True}
+
+
+@app.delete("/api/library/{entry_id}")
+def delete_library_entry(entry_id: int):
+    _, affected = execute_write("DELETE FROM library_entries WHERE id=%s", (entry_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Library entry not found")
+    return {"ok": True}
+
+
+@app.get("/api/write/stories")
+def get_writer_stories():
+    rows = fetch_all(
+        """
+        SELECT id, title, author, description, genre, status_text, cover_path, accent_hex
+        FROM books
+        ORDER BY id DESC
+        """
+    )
+    return {"items": rows}
+
+
+@app.post("/api/write/stories")
+def create_writer_story(payload: StoryCreateRequest):
+    story_id, _ = execute_write(
+        """
+        INSERT INTO books (title, author, description, cover_path, accent_hex, section_name, status_text, rating, genre, cta_label, sort_order)
+        VALUES (%s, %s, %s, '', '#557E7A', 'recently_updated', 'Draft', 0.0, %s, 'Read now', 999)
+        """,
+        (payload.title, payload.author, payload.description, payload.genre),
+    )
+    return {"ok": True, "id": story_id}
+
+
+@app.put("/api/write/stories/{story_id}")
+def update_writer_story(story_id: int, payload: StoryUpdateRequest):
+    rows = fetch_all("SELECT * FROM books WHERE id=%s", (story_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE books
+        SET title=%s, author=%s, description=%s, genre=%s
+        WHERE id=%s
+        """,
+        (
+            payload.title or current["title"],
+            payload.author or current["author"],
+            payload.description or current["description"],
+            payload.genre or current["genre"],
+            story_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update story")
+    return {"ok": True}
+
+
+@app.delete("/api/write/stories/{story_id}")
+def delete_writer_story(story_id: int):
+    _, affected = execute_write("DELETE FROM books WHERE id=%s", (story_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Story not found")
+    return {"ok": True}
+
+
+@app.get("/api/admin/bootstrap")
+def admin_bootstrap():
+    categories = fetch_all(
+        "SELECT id, name, topic_count, tab_group, sort_order FROM categories ORDER BY tab_group, sort_order, id"
+    )
+    books = fetch_all(
+        """
+        SELECT id, title, author, description, cover_path, accent_hex, section_name,
+               status_text, rating, genre, cta_label, sort_order
+        FROM books
+        ORDER BY sort_order, id
+        """
+    )
+    return {
+        "categories": categories,
+        "books": books,
+        "stats": {
+            "category_count": len(categories),
+            "book_count": len(books),
+        },
+    }
+
+
+@app.post("/api/admin/categories")
+def admin_create_category(payload: CategoryCreateRequest):
+    _, affected = execute_write(
+        "INSERT INTO categories (name, topic_count, tab_group, sort_order) VALUES (%s, %s, %s, %s)",
+        (payload.name, payload.topic_count, payload.tab_group, payload.sort_order),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to create category")
+    return {"ok": True}
+
+
+@app.put("/api/admin/categories/{category_id}")
+def admin_update_category(category_id: int, payload: CategoryUpdateRequest):
+    rows = fetch_all("SELECT * FROM categories WHERE id=%s", (category_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE categories
+        SET name=%s, topic_count=%s, tab_group=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.name or current["name"],
+            payload.topic_count if payload.topic_count is not None else current["topic_count"],
+            payload.tab_group or current["tab_group"],
+            payload.sort_order if payload.sort_order is not None else current["sort_order"],
+            category_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update category")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/categories/{category_id}")
+def admin_delete_category(category_id: int):
+    _, affected = execute_write("DELETE FROM categories WHERE id=%s", (category_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return {"ok": True}
+
+
+@app.post("/api/admin/books")
+def admin_create_book(payload: AdminBookCreateRequest):
+    book_id, _ = execute_write(
+        """
+        INSERT INTO books (
+            title, author, description, cover_path, accent_hex, section_name,
+            status_text, rating, genre, cta_label, sort_order
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            payload.title,
+            payload.author,
+            payload.description,
+            payload.cover_path,
+            payload.accent_hex,
+            payload.section_name,
+            payload.status_text,
+            payload.rating,
+            payload.genre,
+            payload.cta_label,
+            payload.sort_order,
+        ),
+    )
+    return {"ok": True, "id": book_id}
+
+
+@app.put("/api/admin/books/{book_id}")
+def admin_update_book(book_id: int, payload: AdminBookUpdateRequest):
+    rows = fetch_all("SELECT * FROM books WHERE id=%s", (book_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE books
+        SET title=%s, author=%s, description=%s, cover_path=%s, accent_hex=%s,
+            section_name=%s, status_text=%s, rating=%s, genre=%s, cta_label=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.title or current["title"],
+            payload.author or current["author"],
+            payload.description or current["description"],
+            payload.cover_path if payload.cover_path is not None else current["cover_path"],
+            payload.accent_hex or current["accent_hex"],
+            payload.section_name or current["section_name"],
+            payload.status_text or current["status_text"],
+            payload.rating if payload.rating is not None else current["rating"],
+            payload.genre or current["genre"],
+            payload.cta_label or current["cta_label"],
+            payload.sort_order if payload.sort_order is not None else current["sort_order"],
+            book_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update book")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/books/{book_id}")
+def admin_delete_book(book_id: int):
+    _, affected = execute_write("DELETE FROM books WHERE id=%s", (book_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return {"ok": True}
+
+
+@app.get("/api/admin/notifications")
+def admin_get_notifications():
+    rows = fetch_all(
+        "SELECT id, tab_name, title, message, created_at, sort_order FROM notifications ORDER BY sort_order, id"
+    )
+    return {"items": rows}
+
+
+@app.post("/api/admin/notifications")
+def admin_create_notification(payload: AdminNotificationCreateRequest):
+    row_id, _ = execute_write(
+        """
+        INSERT INTO notifications (tab_name, title, message, created_at, sort_order)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            payload.tab_name,
+            payload.title,
+            payload.message,
+            payload.created_at,
+            payload.sort_order,
+        ),
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.put("/api/admin/notifications/{notification_id}")
+def admin_update_notification(
+    notification_id: int,
+    payload: AdminNotificationUpdateRequest,
+):
+    rows = fetch_all("SELECT * FROM notifications WHERE id=%s", (notification_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE notifications
+        SET tab_name=%s, title=%s, message=%s, created_at=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.tab_name or current["tab_name"],
+            payload.title or current["title"],
+            payload.message or current["message"],
+            payload.created_at or current["created_at"],
+            payload.sort_order if payload.sort_order is not None else current["sort_order"],
+            notification_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update notification")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/notifications/{notification_id}")
+def admin_delete_notification(notification_id: int):
+    _, affected = execute_write("DELETE FROM notifications WHERE id=%s", (notification_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"ok": True}
+
+
+@app.get("/api/admin/menu-items")
+def admin_get_menu_items():
+    rows = fetch_all(
+        "SELECT id, section_name, section_order, label, icon_name, route_name, sort_order FROM menu_items ORDER BY section_order, sort_order, id"
+    )
+    return {"items": rows}
+
+
+@app.post("/api/admin/menu-items")
+def admin_create_menu_item(payload: AdminMenuItemCreateRequest):
+    row_id, _ = execute_write(
+        """
+        INSERT INTO menu_items (section_name, section_order, label, icon_name, route_name, sort_order)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            payload.section_name,
+            payload.section_order,
+            payload.label,
+            payload.icon_name,
+            payload.route_name,
+            payload.sort_order,
+        ),
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.put("/api/admin/menu-items/{menu_item_id}")
+def admin_update_menu_item(menu_item_id: int, payload: AdminMenuItemUpdateRequest):
+    rows = fetch_all("SELECT * FROM menu_items WHERE id=%s", (menu_item_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE menu_items
+        SET section_name=%s, section_order=%s, label=%s, icon_name=%s, route_name=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.section_name or current["section_name"],
+            payload.section_order if payload.section_order is not None else current["section_order"],
+            payload.label or current["label"],
+            payload.icon_name or current["icon_name"],
+            payload.route_name or current["route_name"],
+            payload.sort_order if payload.sort_order is not None else current["sort_order"],
+            menu_item_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update menu item")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/menu-items/{menu_item_id}")
+def admin_delete_menu_item(menu_item_id: int):
+    _, affected = execute_write("DELETE FROM menu_items WHERE id=%s", (menu_item_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+    return {"ok": True}
+
+
+@app.get("/api/admin/write-screen")
+def admin_get_write_screen():
+    rows = fetch_all(
+        "SELECT id, manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta FROM write_screen ORDER BY id ASC LIMIT 1"
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Write screen config not found")
+    return rows[0]
+
+
+@app.put("/api/admin/write-screen")
+def admin_update_write_screen(payload: AdminWriteScreenUpdateRequest):
+    rows = fetch_all("SELECT id FROM write_screen ORDER BY id ASC LIMIT 1")
+    if not rows:
+        execute_write(
+            """
+            INSERT INTO write_screen (manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                payload.manage_tabs,
+                payload.story_tabs,
+                payload.filter_label,
+                payload.sort_label,
+                payload.empty_title,
+                payload.empty_cta,
+            ),
+        )
+        return {"ok": True}
+
+    _, affected = execute_write(
+        """
+        UPDATE write_screen
+        SET manage_tabs=%s, story_tabs=%s, filter_label=%s, sort_label=%s, empty_title=%s, empty_cta=%s
+        WHERE id=%s
+        """,
+        (
+            payload.manage_tabs,
+            payload.story_tabs,
+            payload.filter_label,
+            payload.sort_label,
+            payload.empty_title,
+            payload.empty_cta,
+            rows[0]["id"],
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update write screen config")
+    return {"ok": True}
+
+
+@app.get("/api/admin/profile")
+def admin_get_profile():
+    rows = fetch_all(
+        "SELECT id, display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak FROM profiles ORDER BY id ASC LIMIT 1"
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return rows[0]
+
+
+@app.put("/api/admin/profile")
+def admin_update_profile(payload: AdminProfileUpdateRequest):
+    rows = fetch_all("SELECT id FROM profiles ORDER BY id ASC LIMIT 1")
+    if not rows:
+        execute_write(
+            """
+            INSERT INTO profiles (display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                payload.display_name,
+                payload.username,
+                payload.following,
+                payload.followers,
+                payload.blocked,
+                payload.chapters_read,
+                payload.social_karma,
+                payload.day_streak,
+            ),
+        )
+        return {"ok": True}
+
+    _, affected = execute_write(
+        """
+        UPDATE profiles
+        SET display_name=%s, username=%s, following=%s, followers=%s, blocked=%s,
+            chapters_read=%s, social_karma=%s, day_streak=%s
+        WHERE id=%s
+        """,
+        (
+            payload.display_name,
+            payload.username,
+            payload.following,
+            payload.followers,
+            payload.blocked,
+            payload.chapters_read,
+            payload.social_karma,
+            payload.day_streak,
+            rows[0]["id"],
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update profile")
+    return {"ok": True}
+
+
+@app.get("/api/admin/reading-lists")
+def admin_get_reading_lists():
+    rows = fetch_all(
+        "SELECT id, profile_id, name, story_count, cover_path, sort_order FROM reading_lists ORDER BY sort_order, id"
+    )
+    return {"items": rows}
+
+
+@app.post("/api/admin/reading-lists")
+def admin_create_reading_list(payload: AdminReadingListCreateRequest):
+    row_id, _ = execute_write(
+        """
+        INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            payload.profile_id,
+            payload.name,
+            payload.story_count,
+            payload.cover_path,
+            payload.sort_order,
+        ),
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.put("/api/admin/reading-lists/{list_id}")
+def admin_update_reading_list(list_id: int, payload: AdminReadingListUpdateRequest):
+    rows = fetch_all("SELECT * FROM reading_lists WHERE id=%s", (list_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reading list not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE reading_lists
+        SET profile_id=%s, name=%s, story_count=%s, cover_path=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.profile_id if payload.profile_id is not None else current["profile_id"],
+            payload.name or current["name"],
+            payload.story_count if payload.story_count is not None else current["story_count"],
+            payload.cover_path if payload.cover_path is not None else current["cover_path"],
+            payload.sort_order if payload.sort_order is not None else current["sort_order"],
+            list_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update reading list")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/reading-lists/{list_id}")
+def admin_delete_reading_list(list_id: int):
+    _, affected = execute_write("DELETE FROM reading_lists WHERE id=%s", (list_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Reading list not found")
+    return {"ok": True}
+
+
+@app.get("/api/admin/achievements")
+def admin_get_achievements():
+    rows = fetch_all(
+        "SELECT id, group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order FROM achievements ORDER BY group_order, sort_order, id"
+    )
+    return {"items": rows}
+
+
+@app.post("/api/admin/achievements")
+def admin_create_achievement(payload: AdminAchievementCreateRequest):
+    row_id, _ = execute_write(
+        """
+        INSERT INTO achievements (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            payload.group_name,
+            payload.group_order,
+            payload.title,
+            payload.subtitle,
+            payload.progress_label,
+            payload.badge_value,
+            payload.style,
+            payload.sort_order,
+        ),
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.put("/api/admin/achievements/{achievement_id}")
+def admin_update_achievement(achievement_id: int, payload: AdminAchievementUpdateRequest):
+    rows = fetch_all("SELECT * FROM achievements WHERE id=%s", (achievement_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Achievement not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE achievements
+        SET group_name=%s, group_order=%s, title=%s, subtitle=%s,
+            progress_label=%s, badge_value=%s, style=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.group_name or current["group_name"],
+            payload.group_order if payload.group_order is not None else current["group_order"],
+            payload.title or current["title"],
+            payload.subtitle or current["subtitle"],
+            payload.progress_label or current["progress_label"],
+            payload.badge_value or current["badge_value"],
+            payload.style or current["style"],
+            payload.sort_order if payload.sort_order is not None else current["sort_order"],
+            achievement_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update achievement")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/achievements/{achievement_id}")
+def admin_delete_achievement(achievement_id: int):
+    _, affected = execute_write("DELETE FROM achievements WHERE id=%s", (achievement_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Achievement not found")
+    return {"ok": True}
