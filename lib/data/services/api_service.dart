@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/app_bootstrap.dart';
@@ -21,10 +23,14 @@ class ApiService {
       return _overrideApiBaseUrl;
     }
 
-    if (Platform.isAndroid) {
-      return 'http://10.0.2.2:8000';
+    if (kDebugMode) {
+      if (Platform.isAndroid) {
+        return 'http://10.0.2.2:8000';
+      }
+      return 'http://127.0.0.1:8000';
     }
-    return 'http://127.0.0.1:8000';
+
+    return _productionApiBaseUrl;
   }
 
   Future<http.Response> _requestWithHostFallback(
@@ -34,18 +40,73 @@ class ApiService {
     try {
       return await request(_baseUrl).timeout(timeout);
     } on SocketException {
-      if (_baseUrl == _productionApiBaseUrl) {
-        rethrow;
-      }
+      if (_baseUrl == _productionApiBaseUrl) rethrow;
+      return request(_productionApiBaseUrl).timeout(timeout);
+    } on http.ClientException {
+      if (_baseUrl == _productionApiBaseUrl) rethrow;
+      return request(_productionApiBaseUrl).timeout(timeout);
+    } on TimeoutException {
+      if (_baseUrl == _productionApiBaseUrl) rethrow;
       return request(_productionApiBaseUrl).timeout(timeout);
     }
   }
 
+  Future<http.Response> _get(
+    String path, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.get(Uri.parse('$baseUrl$path')),
+      timeout,
+    );
+  }
+
+  Future<http.Response> _post(
+    String path,
+    Object body, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.post(
+        Uri.parse('$baseUrl$path'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      ),
+      timeout,
+    );
+  }
+
+  Future<http.Response> _put(
+    String path,
+    Object body, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.put(
+        Uri.parse('$baseUrl$path'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      ),
+      timeout,
+    );
+  }
+
+  Future<http.Response> _delete(
+    String path, {
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _requestWithHostFallback(
+      (baseUrl) => http.delete(Uri.parse('$baseUrl$path')),
+      timeout,
+    );
+  }
+
   Future<AppBootstrap> fetchBootstrap() async {
     try {
-      final response = await http
-          .get(Uri.parse('$_baseUrl/api/bootstrap'))
-          .timeout(const Duration(seconds: 5));
+      final response = await _get(
+        '/api/bootstrap',
+        timeout: const Duration(seconds: 5),
+      );
       if (response.statusCode == 200) {
         return AppBootstrap.fromMap(
           jsonDecode(response.body) as Map<String, dynamic>,
@@ -57,11 +118,11 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> fetchNotifications({String? tab}) async {
-    final uri = Uri.parse('$_baseUrl/api/notifications').replace(
-      queryParameters: {if (tab != null && tab.trim().isNotEmpty) 'tab': tab},
-    );
     try {
-      final response = await http.get(uri).timeout(const Duration(seconds: 7));
+      final response = await _get(
+        '/api/notifications${tab != null && tab.trim().isNotEmpty ? '?tab=${Uri.encodeComponent(tab)}' : ''}',
+        timeout: const Duration(seconds: 7),
+      );
       if (response.statusCode == 200) {
         final payload = jsonDecode(response.body) as Map<String, dynamic>;
         return List<Map<String, dynamic>>.from(
@@ -85,14 +146,15 @@ class ApiService {
     String genre = '',
     double minRating = 0,
   }) async {
-    final uri = Uri.parse('$_baseUrl/api/search').replace(
+    final uri = Uri(
+      path: '/api/search',
       queryParameters: {
         'query': query,
         'genre': genre,
         'min_rating': minRating.toString(),
       },
     );
-    final response = await http.get(uri).timeout(const Duration(seconds: 8));
+    final response = await _get('${uri.path}?${uri.query}');
     if (response.statusCode != 200) {
       return const <Map<String, dynamic>>[];
     }
@@ -101,9 +163,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> fetchLibraryEntries() async {
-    final response = await http
-        .get(Uri.parse('$_baseUrl/api/library'))
-        .timeout(const Duration(seconds: 8));
+    final response = await _get('/api/library');
     if (response.statusCode != 200) {
       return const <Map<String, dynamic>>[];
     }
@@ -112,29 +172,19 @@ class ApiService {
   }
 
   Future<void> addLibraryEntry(Map<String, dynamic> payload) async {
-    await http
-        .post(
-          Uri.parse('$_baseUrl/api/library'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 8));
+    await _post('/api/library', payload, timeout: const Duration(seconds: 8));
   }
 
   Future<void> updateLibraryEntry(int id, Map<String, dynamic> payload) async {
-    await http
-        .put(
-          Uri.parse('$_baseUrl/api/library/$id'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 8));
+    await _put(
+      '/api/library/$id',
+      payload,
+      timeout: const Duration(seconds: 8),
+    );
   }
 
   Future<void> deleteLibraryEntry(int id) async {
-    await http
-        .delete(Uri.parse('$_baseUrl/api/library/$id'))
-        .timeout(const Duration(seconds: 8));
+    await _delete('/api/library/$id', timeout: const Duration(seconds: 8));
   }
 
   Future<List<Map<String, dynamic>>> fetchWriterStories() async {
@@ -226,7 +276,8 @@ class ApiService {
 
   Future<void> deleteStoryChapter(int chapterId) async {
     await _requestWithHostFallback(
-      (baseUrl) => http.delete(Uri.parse('$baseUrl/api/write/chapters/$chapterId')),
+      (baseUrl) =>
+          http.delete(Uri.parse('$baseUrl/api/write/chapters/$chapterId')),
       const Duration(seconds: 8),
     );
   }
