@@ -8,6 +8,9 @@ import '../models/app_bootstrap.dart';
 class ApiService {
   const ApiService();
 
+  static const String _productionApiBaseUrl =
+      'https://lakmasachith-novel-app-backend.hf.space';
+
   static const String _overrideApiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: '',
@@ -22,6 +25,20 @@ class ApiService {
       return 'http://10.0.2.2:8000';
     }
     return 'http://127.0.0.1:8000';
+  }
+
+  Future<http.Response> _requestWithHostFallback(
+    Future<http.Response> Function(String baseUrl) request,
+    Duration timeout,
+  ) async {
+    try {
+      return await request(_baseUrl).timeout(timeout);
+    } on SocketException {
+      if (_baseUrl == _productionApiBaseUrl) {
+        rethrow;
+      }
+      return request(_productionApiBaseUrl).timeout(timeout);
+    }
   }
 
   Future<AppBootstrap> fetchBootstrap() async {
@@ -121,9 +138,10 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> fetchWriterStories() async {
-    final response = await http
-        .get(Uri.parse('$_baseUrl/api/write/stories'))
-        .timeout(const Duration(seconds: 8));
+    final response = await _requestWithHostFallback(
+      (baseUrl) => http.get(Uri.parse('$baseUrl/api/write/stories')),
+      const Duration(seconds: 8),
+    );
     if (response.statusCode != 200) {
       return const <Map<String, dynamic>>[];
     }
@@ -132,35 +150,40 @@ class ApiService {
   }
 
   Future<void> createWriterStory(Map<String, dynamic> payload) async {
-    await http
-        .post(
-          Uri.parse('$_baseUrl/api/write/stories'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 8));
+    await _requestWithHostFallback(
+      (baseUrl) => http.post(
+        Uri.parse('$baseUrl/api/write/stories'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ),
+      const Duration(seconds: 8),
+    );
   }
 
   Future<void> updateWriterStory(int id, Map<String, dynamic> payload) async {
-    await http
-        .put(
-          Uri.parse('$_baseUrl/api/write/stories/$id'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 8));
+    await _requestWithHostFallback(
+      (baseUrl) => http.put(
+        Uri.parse('$baseUrl/api/write/stories/$id'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ),
+      const Duration(seconds: 8),
+    );
   }
 
   Future<void> deleteWriterStory(int id) async {
-    await http
-        .delete(Uri.parse('$_baseUrl/api/write/stories/$id'))
-        .timeout(const Duration(seconds: 8));
+    await _requestWithHostFallback(
+      (baseUrl) => http.delete(Uri.parse('$baseUrl/api/write/stories/$id')),
+      const Duration(seconds: 8),
+    );
   }
 
   Future<List<Map<String, dynamic>>> fetchStoryChapters(int storyId) async {
-    final response = await http
-        .get(Uri.parse('$_baseUrl/api/write/stories/$storyId/chapters'))
-        .timeout(const Duration(seconds: 8));
+    final response = await _requestWithHostFallback(
+      (baseUrl) =>
+          http.get(Uri.parse('$baseUrl/api/write/stories/$storyId/chapters')),
+      const Duration(seconds: 8),
+    );
     if (response.statusCode != 200) {
       return const <Map<String, dynamic>>[];
     }
@@ -172,13 +195,14 @@ class ApiService {
     int storyId,
     Map<String, dynamic> payload,
   ) async {
-    final response = await http
-        .post(
-          Uri.parse('$_baseUrl/api/write/stories/$storyId/chapters'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 8));
+    final response = await _requestWithHostFallback(
+      (baseUrl) => http.post(
+        Uri.parse('$baseUrl/api/write/stories/$storyId/chapters'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ),
+      const Duration(seconds: 8),
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       return null;
     }
@@ -190,19 +214,21 @@ class ApiService {
     int chapterId,
     Map<String, dynamic> payload,
   ) async {
-    await http
-        .put(
-          Uri.parse('$_baseUrl/api/write/chapters/$chapterId'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 8));
+    await _requestWithHostFallback(
+      (baseUrl) => http.put(
+        Uri.parse('$baseUrl/api/write/chapters/$chapterId'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ),
+      const Duration(seconds: 8),
+    );
   }
 
   Future<void> deleteStoryChapter(int chapterId) async {
-    await http
-        .delete(Uri.parse('$_baseUrl/api/write/chapters/$chapterId'))
-        .timeout(const Duration(seconds: 8));
+    await _requestWithHostFallback(
+      (baseUrl) => http.delete(Uri.parse('$baseUrl/api/write/chapters/$chapterId')),
+      const Duration(seconds: 8),
+    );
   }
 
   static final Map<String, dynamic> _fallbackData = <String, dynamic>{
