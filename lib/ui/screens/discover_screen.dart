@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/app_bootstrap.dart';
 import '../../data/services/api_service.dart';
+import 'explore_screen.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({
@@ -55,7 +56,12 @@ class _DiscoverScreenState extends State<DiscoverScreen>
               children: [
                 IconButton(
                   onPressed: () {
-                    // Open drawer or menu
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ExploreScreen(topics: widget.data.exploreTopics),
+                      ),
+                    );
                   },
                   icon: const Icon(Icons.menu_open_rounded, size: 28),
                   padding: EdgeInsets.zero,
@@ -115,6 +121,7 @@ class _DiscoverScreenState extends State<DiscoverScreen>
     final tabLabel = widget.data.discoverTabs[tabIndex].toLowerCase();
     final allBooks = _booksForDiscover();
     final sections = _discoverSectionsForTab(tabLabel, allBooks);
+    final showExploreLead = tabLabel == 'new' && sections.isNotEmpty;
 
     return Container(
       color: Colors.white,
@@ -123,16 +130,44 @@ class _DiscoverScreenState extends State<DiscoverScreen>
         shrinkWrap: true,
         padding: const EdgeInsets.fromLTRB(16, 18, 16, 30),
         children: [
-          for (var i = 0; i < sections.length; i++) ...[
-            _DynamicStoryRail(section: sections[i]),
+          if (showExploreLead) ...[
+            _ExploreStoriesSection(
+              books: sections.first.books,
+              topics: widget.data.exploreTopics,
+              onOpenExplore: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        ExploreScreen(topics: widget.data.exploreTopics),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 24),
-            if (i == 1) ...[
-              _GenrePillRow(topics: widget.data.exploreTopics),
+          ],
+          for (var i = 0; i < sections.length; i++) ...[
+            if (!(showExploreLead && i == 0)) ...[
+              _DynamicStoryRail(section: sections[i]),
               const SizedBox(height: 24),
-            ],
-            if (i == 2) ...[
-              _AuthorsStrip(books: allBooks),
-              const SizedBox(height: 24),
+              if (i == 1) ...[
+                _GenrePillRow(
+                  topics: widget.data.exploreTopics,
+                  books: allBooks,
+                  onOpenExplore: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ExploreScreen(topics: widget.data.exploreTopics),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
+              ],
+              if (i == 2) ...[
+                _AuthorsStrip(books: allBooks),
+                const SizedBox(height: 24),
+              ],
             ],
           ],
         ],
@@ -274,6 +309,55 @@ class _DiscoverScreenState extends State<DiscoverScreen>
   }
 }
 
+class _ExploreStoriesSection extends StatelessWidget {
+  const _ExploreStoriesSection({
+    required this.books,
+    required this.topics,
+    required this.onOpenExplore,
+  });
+
+  final List<BookCardModel> books;
+  final List<ExploreTopicModel> topics;
+  final VoidCallback onOpenExplore;
+
+  @override
+  Widget build(BuildContext context) {
+    if (books.isEmpty) return const SizedBox.shrink();
+    final lead = books.first;
+    final covers = books.take(3).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          lead.primaryGenre.isEmpty ? 'Portal Fantasy' : lead.primaryGenre,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 120,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: covers.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              return _StoryCard(book: covers[index], width: 86);
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        _ActiveStoryDetail(book: lead),
+        const SizedBox(height: 16),
+        _GenrePillRow(
+          topics: topics,
+          books: books,
+          onOpenExplore: onOpenExplore,
+        ),
+      ],
+    );
+  }
+}
+
 class _DiscoverRailSection {
   const _DiscoverRailSection({required this.title, required this.books});
 
@@ -341,16 +425,37 @@ class _DynamicStoryRailState extends State<_DynamicStoryRail> {
           ),
         ),
         const SizedBox(height: 10),
-        _ActiveStoryDetail(book: book),
+        _ActiveStoryDetail(
+          book: book,
+          onRead: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => StoryDetailScreen(
+                  book: BookDetailModel(
+                    id: book.id,
+                    title: book.title,
+                    author: book.author,
+                    description: book.description,
+                    statusText: book.statusText,
+                    rating: book.rating,
+                    genre: book.primaryGenre,
+                    cta: book.cta,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
       ],
     );
   }
 }
 
 class _ActiveStoryDetail extends StatelessWidget {
-  const _ActiveStoryDetail({required this.book});
+  const _ActiveStoryDetail({required this.book, this.onRead});
 
   final BookCardModel book;
+  final VoidCallback? onRead;
 
   @override
   Widget build(BuildContext context) {
@@ -433,7 +538,7 @@ class _ActiveStoryDetail extends StatelessWidget {
             ],
             const Spacer(),
             ElevatedButton(
-              onPressed: () {},
+              onPressed: onRead,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.brand,
                 padding: const EdgeInsets.symmetric(
@@ -478,42 +583,83 @@ class _GenreTag extends StatelessWidget {
 }
 
 class _GenrePillRow extends StatelessWidget {
-  const _GenrePillRow({required this.topics});
+  const _GenrePillRow({
+    required this.topics,
+    required this.books,
+    required this.onOpenExplore,
+  });
 
   final List<ExploreTopicModel> topics;
+  final List<BookCardModel> books;
+  final VoidCallback onOpenExplore;
 
   @override
   Widget build(BuildContext context) {
-    if (topics.isEmpty) return const SizedBox.shrink();
+    final effectiveTopics = topics.isNotEmpty
+        ? topics
+        : books
+              .map((b) => b.primaryGenre)
+              .where((g) => g.trim().isNotEmpty)
+              .toSet()
+              .take(10)
+              .map((name) => ExploreTopicModel(name: name, topicCount: 0))
+              .toList();
+
+    if (effectiveTopics.isEmpty) return const SizedBox.shrink();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Browse genres',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+        Row(
+          children: [
+            Text(
+              'Browse genres',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const Spacer(),
+            TextButton(onPressed: onOpenExplore, child: const Text('See all')),
+          ],
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 6),
         SizedBox(
-          height: 34,
+          height: 38,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            itemCount: topics.length.clamp(0, 12),
+            itemCount: effectiveTopics.length.clamp(0, 12),
             separatorBuilder: (_, _) => const SizedBox(width: 8),
             itemBuilder: (context, index) {
-              final topic = topics[index];
-              return Container(
-                alignment: Alignment.center,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5F5F5),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Text(
-                  topic.name,
-                  style: Theme.of(context).textTheme.bodySmall,
+              final topic = effectiveTopics[index];
+              final cover = books.isEmpty ? null : books[index % books.length];
+
+              return InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: onOpenExplore,
+                child: Container(
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(18),
+                    image: cover == null || cover.coverPath.isEmpty
+                        ? null
+                        : DecorationImage(
+                            image: AssetImage(cover.coverPath),
+                            fit: BoxFit.cover,
+                            colorFilter: ColorFilter.mode(
+                              Colors.black.withValues(alpha: 0.35),
+                              BlendMode.darken,
+                            ),
+                          ),
+                  ),
+                  child: Text(
+                    topic.name,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: cover == null ? AppTheme.ink : Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
               );
             },

@@ -56,6 +56,18 @@ class StoryUpdateRequest(BaseModel):
     genre: str | None = None
 
 
+class ChapterCreateRequest(BaseModel):
+    title: str
+    content: str
+    chapter_number: int | None = None
+
+
+class ChapterUpdateRequest(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    chapter_number: int | None = None
+
+
 class CategoryCreateRequest(BaseModel):
     name: str
     topic_count: int = 0
@@ -560,6 +572,92 @@ def get_writer_stories():
     return {"items": rows}
 
 
+@app.get("/api/write/stories/{story_id}/chapters")
+def get_story_chapters(story_id: int):
+    story_rows = fetch_all("SELECT id FROM books WHERE id=%s", (story_id,))
+    if not story_rows:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    rows = fetch_all(
+        """
+        SELECT id, story_id, chapter_number, title, content, sort_order, created_at, updated_at
+        FROM chapters
+        WHERE story_id=%s
+        ORDER BY chapter_number, sort_order, id
+        """,
+        (story_id,),
+    )
+    return {"items": rows}
+
+
+@app.post("/api/write/stories/{story_id}/chapters")
+def create_story_chapter(story_id: int, payload: ChapterCreateRequest):
+    story_rows = fetch_all("SELECT id FROM books WHERE id=%s", (story_id,))
+    if not story_rows:
+        raise HTTPException(status_code=404, detail="Story not found")
+
+    chapter_number = payload.chapter_number
+    if chapter_number is None:
+        next_rows = fetch_all(
+            "SELECT COALESCE(MAX(chapter_number), 0) + 1 AS next_chapter FROM chapters WHERE story_id=%s",
+            (story_id,),
+        )
+        chapter_number = next_rows[0]["next_chapter"]
+
+    row_id, _ = execute_write(
+        """
+        INSERT INTO chapters (story_id, chapter_number, title, content, sort_order)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            story_id,
+            chapter_number,
+            payload.title,
+            payload.content,
+            chapter_number,
+        ),
+    )
+    return {"ok": True, "id": row_id}
+
+
+@app.put("/api/write/chapters/{chapter_id}")
+def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
+    rows = fetch_all("SELECT * FROM chapters WHERE id=%s", (chapter_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    current = rows[0]
+    _, affected = execute_write(
+        """
+        UPDATE chapters
+        SET chapter_number=%s, title=%s, content=%s, sort_order=%s
+        WHERE id=%s
+        """,
+        (
+            payload.chapter_number
+            if payload.chapter_number is not None
+            else current["chapter_number"],
+            payload.title or current["title"],
+            payload.content if payload.content is not None else current["content"],
+            payload.chapter_number
+            if payload.chapter_number is not None
+            else current["sort_order"],
+            chapter_id,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to update chapter")
+    return {"ok": True}
+
+
+@app.delete("/api/write/chapters/{chapter_id}")
+def delete_story_chapter(chapter_id: int):
+    _, affected = execute_write("DELETE FROM chapters WHERE id=%s", (chapter_id,))
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {"ok": True}
+
+
 @app.post("/api/write/stories")
 def create_writer_story(payload: StoryCreateRequest):
     story_id, _ = execute_write(
@@ -619,12 +717,41 @@ def admin_bootstrap():
         ORDER BY sort_order, id
         """
     )
+    notifications = fetch_all(
+        "SELECT id, tab_name, title, message, created_at, sort_order FROM notifications ORDER BY sort_order, id"
+    )
+    menu_items = fetch_all(
+        "SELECT id, section_name, section_order, label, icon_name, route_name, sort_order FROM menu_items ORDER BY section_order, sort_order, id"
+    )
+    write_screen_rows = fetch_all(
+        "SELECT id, manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta FROM write_screen ORDER BY id ASC LIMIT 1"
+    )
+    profile_rows = fetch_all(
+        "SELECT id, display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak FROM profiles ORDER BY id ASC LIMIT 1"
+    )
+    reading_lists = fetch_all(
+        "SELECT id, profile_id, name, story_count, cover_path, sort_order FROM reading_lists ORDER BY sort_order, id"
+    )
+    achievements = fetch_all(
+        "SELECT id, group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order FROM achievements ORDER BY group_order, sort_order, id"
+    )
+
     return {
         "categories": categories,
         "books": books,
+        "notifications": notifications,
+        "menu_items": menu_items,
+        "write_screen": write_screen_rows[0] if write_screen_rows else None,
+        "profile": profile_rows[0] if profile_rows else None,
+        "reading_lists": reading_lists,
+        "achievements": achievements,
         "stats": {
             "category_count": len(categories),
             "book_count": len(books),
+            "notification_count": len(notifications),
+            "menu_item_count": len(menu_items),
+            "reading_list_count": len(reading_lists),
+            "achievement_count": len(achievements),
         },
     }
 

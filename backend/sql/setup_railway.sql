@@ -25,6 +25,18 @@ CREATE TABLE books (
     sort_order INT NOT NULL DEFAULT 0
 );
 
+CREATE TABLE chapters (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    story_id INT NOT NULL,
+    chapter_number INT NOT NULL DEFAULT 1,
+    title VARCHAR(255) NOT NULL,
+    content LONGTEXT NOT NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_chapter_story FOREIGN KEY (story_id) REFERENCES books(id) ON DELETE CASCADE
+);
+
 CREATE TABLE library_entries (
     id INT AUTO_INCREMENT PRIMARY KEY,
     book_id INT NOT NULL,
@@ -186,3 +198,6 @@ INSERT INTO achievements (group_name, group_order, title, subtitle, progress_lab
 ('Lifetime Reading', 3, 'Page Flipper', '0/2 Chapters Read', '0/2 Chapters Read', '2', 'ink', 1),
 ('Lifetime Reading', 3, 'Book Explorer', '0/5 Chapters Read', '0/5 Chapters Read', '5', 'ink', 2),
 ('Lifetime Reading', 3, 'Reading Enthusiast', '0/10 Chapters Read', '0/10 Chapters Read', '10', 'ink', 3);
+
+INSERT INTO chapters (story_id, chapter_number, title, content, sort_order) VALUES
+(1, 1, 'Chapter 1', 'This is the first chapter. Start writing from the Write tab to replace this content.', 1);

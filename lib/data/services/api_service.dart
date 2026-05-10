@@ -157,6 +157,54 @@ class ApiService {
         .timeout(const Duration(seconds: 8));
   }
 
+  Future<List<Map<String, dynamic>>> fetchStoryChapters(int storyId) async {
+    final response = await http
+        .get(Uri.parse('$_baseUrl/api/write/stories/$storyId/chapters'))
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+  }
+
+  Future<int?> createStoryChapter(
+    int storyId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$_baseUrl/api/write/stories/$storyId/chapters'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
+    }
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return data['id'] as int?;
+  }
+
+  Future<void> updateStoryChapter(
+    int chapterId,
+    Map<String, dynamic> payload,
+  ) async {
+    await http
+        .put(
+          Uri.parse('$_baseUrl/api/write/chapters/$chapterId'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        )
+        .timeout(const Duration(seconds: 8));
+  }
+
+  Future<void> deleteStoryChapter(int chapterId) async {
+    await http
+        .delete(Uri.parse('$_baseUrl/api/write/chapters/$chapterId'))
+        .timeout(const Duration(seconds: 8));
+  }
+
   static final Map<String, dynamic> _fallbackData = <String, dynamic>{
     'discover_tabs': ['New', 'Popular', 'Fanfiction', 'Newsfeed'],
     'recently_updated': [

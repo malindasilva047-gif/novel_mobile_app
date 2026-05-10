@@ -9,6 +9,7 @@ load_dotenv()
 REQUIRED_TABLES = {
     "categories",
     "books",
+    "chapters",
     "library_entries",
     "write_screen",
     "notifications",
@@ -254,9 +255,29 @@ def run_startup_migrations() -> dict[str, int]:
 
     result = {
         "columns_added": 0,
+        "tables_added": 0,
         "categories_added": 0,
         "books_added": 0,
     }
+
+    cursor.execute("SHOW TABLES LIKE 'chapters'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE chapters (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                story_id INT NOT NULL,
+                chapter_number INT NOT NULL DEFAULT 1,
+                title VARCHAR(255) NOT NULL,
+                content LONGTEXT NOT NULL,
+                sort_order INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                CONSTRAINT fk_chapter_story FOREIGN KEY (story_id) REFERENCES books(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
 
     book_columns = {
         "primary_genre": "ALTER TABLE books ADD COLUMN primary_genre VARCHAR(80) NOT NULL DEFAULT ''",

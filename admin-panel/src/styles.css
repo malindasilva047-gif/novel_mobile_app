@@ -167,6 +167,17 @@ button.danger {
   background: var(--danger);
 }
 
+.actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.actions button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
