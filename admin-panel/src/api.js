@@ -1,10 +1,34 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000";
+const ADMIN_TOKEN_KEY = "novel_admin_token";
+
+export function getAdminToken() {
+  return window.localStorage.getItem(ADMIN_TOKEN_KEY) || "";
+}
+
+export function setAdminToken(token) {
+  if (!token) {
+    window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+    return;
+  }
+  window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
+}
+
+export function clearAdminToken() {
+  window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+}
 
 async function request(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  const token = getAdminToken();
+  if (token && !headers.Authorization) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...headers,
     },
     ...options,
   });
@@ -16,6 +40,28 @@ async function request(path, options = {}) {
 
   if (response.status === 204) return null;
   return response.json();
+}
+
+export function loginAdmin(payload) {
+  return request("/api/admin/login", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function getAdminSession() {
+  return request("/api/admin/session");
+}
+
+export function getContentVersion() {
+  return request("/api/content/version");
+}
+
+export function listStoryImages() {
+  return request("/api/story-images");
+}
+
+export function uploadImage(file) {
+  const body = new FormData();
+  body.append("file", file);
+  return request("/api/upload-image", { method: "POST", body });
 }
 
 export function getAdminBootstrap() {
@@ -182,4 +228,11 @@ export function deleteAchievement(id) {
   return request(`/api/admin/achievements/${id}`, { method: "DELETE" });
 }
 
-export { API_BASE_URL };
+export function updateSupportRequest(id, payload) {
+  return request(`/api/admin/support-requests/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export { ADMIN_TOKEN_KEY, API_BASE_URL };

@@ -61,6 +61,23 @@ class ApiService {
     );
   }
 
+  String resolveAssetUrl(String path) {
+    if (path.isEmpty) {
+      return path;
+    }
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return path;
+    }
+    if (path.startsWith('story_card_images/')) {
+      final filename = path.split('/').last;
+      return '$_baseUrl/uploads/$filename';
+    }
+    if (!path.startsWith('/')) {
+      return '$_baseUrl/$path';
+    }
+    return '$_baseUrl$path';
+  }
+
   Future<http.Response> _post(
     String path,
     Object body, {
@@ -117,6 +134,39 @@ class ApiService {
     return AppBootstrap.fromMap(_fallbackData);
   }
 
+  Future<String> fetchContentVersion() async {
+    try {
+      final response = await _get(
+        '/api/content/version',
+        timeout: const Duration(seconds: 5),
+      );
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        return payload['value']?.toString() ?? '';
+      }
+    } catch (_) {}
+
+    return '';
+  }
+
+  Future<Map<String, dynamic>> uploadWriterImage(File file) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_baseUrl/api/write/upload-image'),
+    );
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 15));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+
+    return const <String, dynamic>{};
+  }
+
   Future<List<Map<String, dynamic>>> fetchNotifications({String? tab}) async {
     try {
       final response = await _get(
@@ -139,6 +189,17 @@ class ApiService {
         .map((item) => Map<String, dynamic>.from(item as Map<String, dynamic>))
         .toList();
     return fallback;
+  }
+
+  Future<void> submitSupportRequest(Map<String, dynamic> payload) async {
+    final response = await _post(
+      '/api/support/requests',
+      payload,
+      timeout: const Duration(seconds: 10),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Unable to submit support request');
+    }
   }
 
   Future<List<Map<String, dynamic>>> searchStories({

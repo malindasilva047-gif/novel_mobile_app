@@ -8,10 +8,12 @@ class LibraryScreen extends StatefulWidget {
     super.key,
     required this.data,
     required this.apiService,
+    required this.onOpenDiscover,
   });
 
   final AppBootstrap data;
   final ApiService apiService;
+  final VoidCallback onOpenDiscover;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -135,16 +137,21 @@ class _LibraryScreenState extends State<LibraryScreen>
               // Current Reads
               _CurrentReadsTab(
                 entries: _entries,
+                apiService: widget.apiService,
                 loading: _loading,
                 onDelete: _removeEntry,
                 onToggleStatus: _changeStatus,
+                onOpenDiscover: widget.onOpenDiscover,
               ),
 
               // Reading Lists
-              _ReadingListsTab(lists: widget.data.profile.readingLists),
+              _ReadingListsTab(
+                lists: widget.data.profile.readingLists,
+                apiService: widget.apiService,
+              ),
 
               // History
-              _HistoryTab(entries: _entries),
+              _HistoryTab(entries: _entries, apiService: widget.apiService),
             ],
           ),
         ),
@@ -156,15 +163,19 @@ class _LibraryScreenState extends State<LibraryScreen>
 class _CurrentReadsTab extends StatelessWidget {
   const _CurrentReadsTab({
     required this.entries,
+    required this.apiService,
     required this.loading,
     required this.onDelete,
     required this.onToggleStatus,
+    required this.onOpenDiscover,
   });
 
   final List<LibraryEntryModel> entries;
+  final ApiService apiService;
   final bool loading;
   final ValueChanged<LibraryEntryModel> onDelete;
   final ValueChanged<LibraryEntryModel> onToggleStatus;
+  final VoidCallback onOpenDiscover;
 
   @override
   Widget build(BuildContext context) {
@@ -210,6 +221,7 @@ class _CurrentReadsTab extends StatelessWidget {
           ...entries.map(
             (entry) => _LibraryEntryTile(
               entry: entry,
+              apiService: apiService,
               onDelete: () => onDelete(entry),
               onToggleStatus: () => onToggleStatus(entry),
             ),
@@ -218,9 +230,7 @@ class _CurrentReadsTab extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: () {
-              // Navigate to discover screen
-            },
+            onPressed: onOpenDiscover,
             icon: const Icon(Icons.auto_stories_outlined),
             label: const Text('Discover more stories'),
           ),
@@ -231,9 +241,10 @@ class _CurrentReadsTab extends StatelessWidget {
 }
 
 class _ReadingListsTab extends StatelessWidget {
-  const _ReadingListsTab({required this.lists});
+  const _ReadingListsTab({required this.lists, required this.apiService});
 
   final List<ReadingListModel> lists;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -274,7 +285,11 @@ class _ReadingListsTab extends StatelessWidget {
           ...lists.asMap().entries.map(
             (entry) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _ReadingListRowCard(list: entry.value, index: entry.key),
+              child: _ReadingListRowCard(
+                list: entry.value,
+                index: entry.key,
+                apiService: apiService,
+              ),
             ),
           ),
         const SizedBox(height: 26),
@@ -282,7 +297,11 @@ class _ReadingListsTab extends StatelessWidget {
           width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: () {
-              // Show create reading list dialog
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Create reading lists from the admin panel for now.'),
+                ),
+              );
             },
             icon: const Icon(Icons.add_rounded),
             label: const Text('Create New List'),
@@ -294,9 +313,10 @@ class _ReadingListsTab extends StatelessWidget {
 }
 
 class _HistoryTab extends StatelessWidget {
-  const _HistoryTab({required this.entries});
+  const _HistoryTab({required this.entries, required this.apiService});
 
   final List<LibraryEntryModel> entries;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -343,7 +363,10 @@ class _HistoryTab extends StatelessWidget {
               .map(
                 (entry) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: _HistoryEntryCard(entry: entry),
+                  child: _HistoryEntryCard(
+                    entry: entry,
+                    apiService: apiService,
+                  ),
                 ),
               ),
       ],
@@ -352,9 +375,10 @@ class _HistoryTab extends StatelessWidget {
 }
 
 class _HistoryEntryCard extends StatelessWidget {
-  const _HistoryEntryCard({required this.entry});
+  const _HistoryEntryCard({required this.entry, required this.apiService});
 
   final LibraryEntryModel entry;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -372,7 +396,12 @@ class _HistoryEntryCard extends StatelessWidget {
               width: 42,
               height: 58,
               child: entry.book.coverPath.isNotEmpty
-                  ? Image.asset(entry.book.coverPath, fit: BoxFit.cover)
+                  ? Image.network(
+                    apiService.resolveAssetUrl(entry.book.coverPath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) =>
+                      const ColoredBox(color: Color(0xFFE4E4E4)),
+                  )
                   : const ColoredBox(color: Color(0xFFE4E4E4)),
             ),
           ),
@@ -414,11 +443,13 @@ class _HistoryEntryCard extends StatelessWidget {
 class _LibraryEntryTile extends StatelessWidget {
   const _LibraryEntryTile({
     required this.entry,
+    required this.apiService,
     required this.onDelete,
     required this.onToggleStatus,
   });
 
   final LibraryEntryModel entry;
+  final ApiService apiService;
   final VoidCallback onDelete;
   final VoidCallback onToggleStatus;
 
@@ -438,8 +469,8 @@ class _LibraryEntryTile extends StatelessWidget {
               width: 70,
               height: 100,
               child: entry.book.coverPath.isNotEmpty
-                  ? Image.asset(
-                      entry.book.coverPath,
+                  ? Image.network(
+                    apiService.resolveAssetUrl(entry.book.coverPath),
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) =>
                           _BookCoverFallback(color: color),
@@ -573,10 +604,15 @@ class _LibraryEntryTile extends StatelessWidget {
 }
 
 class _ReadingListRowCard extends StatelessWidget {
-  const _ReadingListRowCard({required this.list, required this.index});
+  const _ReadingListRowCard({
+    required this.list,
+    required this.index,
+    required this.apiService,
+  });
 
   final ReadingListModel list;
   final int index;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -595,8 +631,8 @@ class _ReadingListRowCard extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: list.coverPath.isNotEmpty
-                  ? Image.asset(
-                      list.coverPath,
+                  ? Image.network(
+                    apiService.resolveAssetUrl(list.coverPath),
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) =>
                           const ColoredBox(color: Color(0xFFDDDDDD)),

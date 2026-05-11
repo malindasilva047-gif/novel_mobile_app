@@ -9,10 +9,12 @@ class NotificationsScreen extends StatefulWidget {
     super.key,
     required this.data,
     required this.apiService,
+    required this.onOpenDiscover,
   });
 
   final AppBootstrap data;
   final ApiService apiService;
+  final VoidCallback onOpenDiscover;
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
@@ -62,7 +64,11 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           child: TabBarView(
             controller: _tabController,
             children: tabs.map((tab) {
-              return _NotificationTab(tab: tab, apiService: widget.apiService);
+              return _NotificationTab(
+                tab: tab,
+                apiService: widget.apiService,
+                onOpenDiscover: widget.onOpenDiscover,
+              );
             }).toList(),
           ),
         ),
@@ -72,10 +78,15 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 }
 
 class _NotificationTab extends StatelessWidget {
-  const _NotificationTab({required this.tab, required this.apiService});
+  const _NotificationTab({
+    required this.tab,
+    required this.apiService,
+    required this.onOpenDiscover,
+  });
 
   final String tab;
   final ApiService apiService;
+  final VoidCallback onOpenDiscover;
 
   @override
   Widget build(BuildContext context) {
@@ -114,7 +125,7 @@ class _NotificationTab extends StatelessWidget {
                   SizedBox(
                     width: 180,
                     child: FilledButton(
-                      onPressed: () {},
+                      onPressed: onOpenDiscover,
                       style: FilledButton.styleFrom(
                         backgroundColor: AppTheme.brand,
                       ),

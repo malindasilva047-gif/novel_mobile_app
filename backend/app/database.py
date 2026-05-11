@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import mysql.connector
 from dotenv import load_dotenv
@@ -17,14 +18,27 @@ REQUIRED_TABLES = {
     "profiles",
     "reading_lists",
     "achievements",
+    "app_metadata",
+    "support_requests",
 }
 
 SEED_CATEGORIES = [
     ("Editor's Picks", 0, "discover", 5),
     ("Rising", 0, "discover", 6),
+    ("Popular", 0, "discover", 7),
+    ("Fanfaction", 0, "discover", 8),
+    ("Activity", 0, "discover", 9),
     ("Drama", 28, "explore", 15),
     ("Romance", 41, "explore", 16),
     ("Paranormal", 19, "explore", 17),
+    ("Fantasy", 36, "explore", 18),
+    ("Sci-Fi", 22, "explore", 19),
+    ("Adventure", 18, "explore", 20),
+    ("Action", 17, "explore", 21),
+    ("Young Adult", 26, "explore", 22),
+    ("Horror", 13, "explore", 23),
+    ("LGBTQ+", 11, "explore", 24),
+    ("Erotica", 8, "explore", 25),
 ]
 
 SEED_BOOKS = [
@@ -258,7 +272,33 @@ def run_startup_migrations() -> dict[str, int]:
         "tables_added": 0,
         "categories_added": 0,
         "books_added": 0,
+        "assets_seeded": 0,
     }
+
+    uploads_dir = Path(os.getenv("UPLOAD_DIR", "./uploads")).resolve()
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    cursor.execute("SHOW TABLES LIKE 'app_metadata'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE app_metadata (
+                key_name VARCHAR(100) PRIMARY KEY,
+                key_value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    cursor.execute(
+        """
+        INSERT INTO app_metadata (key_name, key_value)
+        VALUES ('content_version', %s)
+        ON DUPLICATE KEY UPDATE key_value = key_value
+        """,
+        (str(uuid4()),),
+    )
 
     cursor.execute("SHOW TABLES LIKE 'chapters'")
     if cursor.fetchone() is None:
@@ -279,6 +319,25 @@ def run_startup_migrations() -> dict[str, int]:
         )
         result["tables_added"] += 1
 
+    cursor.execute("SHOW TABLES LIKE 'support_requests'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE support_requests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                first_name VARCHAR(120) NOT NULL,
+                issue VARCHAR(120) NOT NULL,
+                subject VARCHAR(255) NOT NULL,
+                description TEXT NOT NULL,
+                status VARCHAR(40) NOT NULL DEFAULT 'open',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
     book_columns = {
         "primary_genre": "ALTER TABLE books ADD COLUMN primary_genre VARCHAR(80) NOT NULL DEFAULT ''",
         "secondary_genre": "ALTER TABLE books ADD COLUMN secondary_genre VARCHAR(80) NOT NULL DEFAULT ''",
@@ -293,6 +352,13 @@ def run_startup_migrations() -> dict[str, int]:
 
     cursor.execute(
         "UPDATE books SET primary_genre = genre WHERE (primary_genre = '' OR primary_genre IS NULL)"
+    )
+    cursor.execute(
+        """
+        UPDATE books
+        SET cover_path = CONCAT('/uploads/', SUBSTRING_INDEX(cover_path, '/', -1))
+        WHERE cover_path LIKE 'story_card_images/%'
+        """
     )
 
     for name, topic_count, tab_group, sort_order in SEED_CATEGORIES:
@@ -350,6 +416,22 @@ def run_startup_migrations() -> dict[str, int]:
                 ),
             )
             result["books_added"] += 1
+
+    static_story_dir = Path(__file__).resolve().parents[2] / "story_card_images"
+    if static_story_dir.exists():
+        for image_path in sorted(static_story_dir.glob("*")):
+            if not image_path.is_file():
+                continue
+            extension = image_path.suffix.lower()
+            if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+                continue
+
+            target_path = uploads_dir / image_path.name
+            if target_path.exists():
+                continue
+
+            target_path.write_bytes(image_path.read_bytes())
+            result["assets_seeded"] += 1
 
     connection.commit()
     cursor.close()

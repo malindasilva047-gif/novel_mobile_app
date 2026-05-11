@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/app_bootstrap.dart';
+import '../../data/services/api_service.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, required this.profile});
+  const ProfileScreen({
+    super.key,
+    required this.profile,
+    required this.apiService,
+  });
 
   final ProfileModel profile;
+  final ApiService apiService;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -136,7 +142,10 @@ class _ProfileScreenState extends State<ProfileScreen>
           child: TabBarView(
             controller: _tabController,
             children: [
-              _AboutTab(profile: widget.profile),
+              _AboutTab(
+                profile: widget.profile,
+                apiService: widget.apiService,
+              ),
               const _StoriesTab(),
               const _WallTab(),
               const _ActivityTab(),
@@ -180,9 +189,10 @@ class _StatCard extends StatelessWidget {
 }
 
 class _AboutTab extends StatelessWidget {
-  const _AboutTab({required this.profile});
+  const _AboutTab({required this.profile, required this.apiService});
 
   final ProfileModel profile;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -246,8 +256,10 @@ class _AboutTab extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               itemCount: profile.readingLists.length,
               separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (context, index) =>
-                  _ReadingListPreview(list: profile.readingLists[index]),
+              itemBuilder: (context, index) => _ReadingListPreview(
+                list: profile.readingLists[index],
+                apiService: apiService,
+              ),
             ),
           ),
         const SizedBox(height: 32),
@@ -331,9 +343,10 @@ class _StatsPanel extends StatelessWidget {
 }
 
 class _ReadingListPreview extends StatelessWidget {
-  const _ReadingListPreview({required this.list});
+  const _ReadingListPreview({required this.list, required this.apiService});
 
   final ReadingListModel list;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -352,7 +365,13 @@ class _ReadingListPreview extends StatelessWidget {
               child: list.coverPath.isNotEmpty
                   ? ClipRRect(
                       borderRadius: BorderRadius.circular(10),
-                      child: Image.asset(list.coverPath, fit: BoxFit.cover),
+                      child: Image.network(
+                        apiService.resolveAssetUrl(list.coverPath),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const ColoredBox(
+                          color: Color(0xFFF5F5F5),
+                        ),
+                      ),
                     )
                   : Icon(
                       Icons.library_books_outlined,

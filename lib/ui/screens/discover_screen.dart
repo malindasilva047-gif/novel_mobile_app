@@ -6,6 +6,7 @@ import '../../core/theme/app_theme.dart';
 import '../../data/models/app_bootstrap.dart';
 import '../../data/services/api_service.dart';
 import 'explore_screen.dart';
+import 'reader_screen.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({
@@ -147,7 +148,10 @@ class _DiscoverScreenState extends State<DiscoverScreen>
           ],
           for (var i = 0; i < sections.length; i++) ...[
             if (!(showExploreLead && i == 0)) ...[
-              _DynamicStoryRail(section: sections[i]),
+              _DynamicStoryRail(
+                section: sections[i],
+                apiService: widget.apiService,
+              ),
               const SizedBox(height: 24),
               if (i == 1) ...[
                 _GenrePillRow(
@@ -366,9 +370,10 @@ class _DiscoverRailSection {
 }
 
 class _DynamicStoryRail extends StatefulWidget {
-  const _DynamicStoryRail({required this.section});
+  const _DynamicStoryRail({required this.section, required this.apiService});
 
   final _DiscoverRailSection section;
+  final ApiService apiService;
 
   @override
   State<_DynamicStoryRail> createState() => _DynamicStoryRailState();
@@ -431,6 +436,7 @@ class _DynamicStoryRailState extends State<_DynamicStoryRail> {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => StoryDetailScreen(
+                  apiService: widget.apiService,
                   book: BookDetailModel(
                     id: book.id,
                     title: book.title,
@@ -1159,9 +1165,31 @@ class _FilterSheetState extends State<_FilterSheet> {
 
 // Story Detail Screen
 class StoryDetailScreen extends StatelessWidget {
-  const StoryDetailScreen({super.key, required this.book});
+  const StoryDetailScreen({
+    super.key,
+    required this.book,
+    required this.apiService,
+  });
 
   final BookDetailModel book;
+  final ApiService apiService;
+
+  Future<void> _saveToLibrary(BuildContext context) async {
+    await apiService.addLibraryEntry({
+      'book_id': book.id,
+      'reading_status': 'Reading',
+      'updated_text': book.statusText,
+      'chapters': 1,
+      'primary_genre': book.genre,
+      'secondary_genre': '',
+    });
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Saved to your library')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1269,7 +1297,15 @@ class StoryDetailScreen extends StatelessWidget {
                         backgroundColor: AppTheme.brand,
                       ),
                       onPressed: () {
-                        // Navigate to reading screen
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ReaderScreen(
+                              title: book.title,
+                              author: book.author,
+                              description: book.description,
+                            ),
+                          ),
+                        );
                       },
                       child: const Text('Read Now'),
                     ),
@@ -1283,9 +1319,7 @@ class StoryDetailScreen extends StatelessWidget {
                     child: OutlinedButton.icon(
                       icon: const Icon(Icons.bookmark_outline),
                       label: const Text('Save to Library'),
-                      onPressed: () {
-                        // Save to library
-                      },
+                      onPressed: () => _saveToLibrary(context),
                     ),
                   ),
                 ],

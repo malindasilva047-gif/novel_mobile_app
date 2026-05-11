@@ -1,9 +1,18 @@
 from collections import defaultdict
+import base64
+from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import mysql.connector
 from pydantic import BaseModel
 
@@ -15,6 +24,12 @@ from .database import (
 
 app = FastAPI(title="Novel Mobile Backend")
 LOGGER = logging.getLogger(__name__)
+UPLOAD_ROOT = Path(os.getenv("UPLOAD_DIR", "./uploads")).resolve()
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-key-change-in-production")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin_Supun")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Ux3@f=7x2")
+ADMIN_TOKEN_EXPIRES_HOURS = int(os.getenv("ADMIN_TOKEN_EXPIRES_HOURS", "24"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,6 +38,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_ROOT), name="uploads")
 
 
 class LibraryCreateRequest(BaseModel):
@@ -47,6 +65,7 @@ class StoryCreateRequest(BaseModel):
     author: str
     description: str
     genre: str
+    cover_path: str = ""
 
 
 class StoryUpdateRequest(BaseModel):
@@ -54,6 +73,7 @@ class StoryUpdateRequest(BaseModel):
     author: str | None = None
     description: str | None = None
     genre: str | None = None
+    cover_path: str | None = None
 
 
 class ChapterCreateRequest(BaseModel):
@@ -202,6 +222,28 @@ class AdminAchievementUpdateRequest(BaseModel):
     sort_order: int | None = None
 
 
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class SupportRequestCreateRequest(BaseModel):
+    email: str
+    first_name: str
+    issue: str
+    subject: str
+    description: str
+
+
+class SupportRequestUpdateRequest(BaseModel):
+    status: str
+
+
+class VersionResponse(BaseModel):
+    value: str
+    updated_at: str | None = None
+
+
 def fetch_all(query: str, params: tuple[Any, ...] | None = None):
     connection = get_connection()
     cursor = connection.cursor(dictionary=True)
@@ -224,6 +266,140 @@ def execute_write(query: str, params: tuple[Any, ...]):
     return last_id, affected
 
 
+def _content_version_row() -> dict[str, Any]:
+    rows = fetch_all(
+        "SELECT key_value, updated_at FROM app_metadata WHERE key_name='content_version' LIMIT 1"
+    )
+    if rows:
+        row = rows[0]
+        return {
+            "value": row["key_value"],
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+
+    value = str(uuid4())
+    execute_write(
+        "INSERT INTO app_metadata (key_name, key_value) VALUES ('content_version', %s)",
+        (value,),
+    )
+    return {"value": value, "updated_at": None}
+
+
+def bump_content_version() -> dict[str, Any]:
+    value = str(uuid4())
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        INSERT INTO app_metadata (key_name, key_value)
+        VALUES ('content_version', %s)
+        ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)
+        """,
+        (value,),
+    )
+    connection.commit()
+    cursor.close()
+    connection.close()
+    return _content_version_row()
+
+
+def create_admin_token(username: str) -> str:
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ADMIN_TOKEN_EXPIRES_HOURS)
+    payload = {
+        "sub": username,
+        "role": "admin",
+        "exp": expires_at.isoformat(),
+    }
+    encoded_payload = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    signature = hmac.new(
+        JWT_SECRET.encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded_payload}.{signature}"
+
+
+def require_admin(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing admin token")
+
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing admin token")
+
+    try:
+        encoded_payload, provided_signature = token.split(".", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid admin token") from exc
+
+    expected_signature = hmac.new(
+        JWT_SECRET.encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, provided_signature):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded_payload.encode("ascii")).decode("utf-8")
+        )
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid admin token") from exc
+
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+    expires_raw = payload.get("exp")
+    if not isinstance(expires_raw, str):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid admin token") from exc
+
+    if expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Admin token expired")
+
+    return payload
+
+
+def _public_image_path(filename: str) -> str:
+    return f"/uploads/{filename}"
+
+
+def _normalize_cover_path(path: str | None) -> str:
+    if not path:
+        return ""
+    if path.startswith(("http://", "https://", "/uploads/")):
+        return path
+    if path.startswith("story_card_images/"):
+        return _public_image_path(path.split("/")[-1])
+    if "/" not in path:
+        return _public_image_path(path)
+    return path
+
+
+def _available_story_images() -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for file_path in sorted(UPLOAD_ROOT.glob("*")):
+        if not file_path.is_file():
+            continue
+        extension = file_path.suffix.lower()
+        if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+            continue
+        items.append(
+            {
+                "name": file_path.name,
+                "path": _public_image_path(file_path.name),
+            }
+        )
+    return items
+
+
 @app.get("/")
 def healthcheck():
     return {"message": "Novel Mobile backend is running."}
@@ -237,8 +413,67 @@ def startup_initialize_database():
         if initialized:
             LOGGER.info("Database tables were missing. Schema/data initialized automatically.")
         LOGGER.info("Startup migrations: %s", migration_report)
+        _content_version_row()
     except (mysql.connector.Error, FileNotFoundError, OSError, ValueError) as exc:
         LOGGER.exception("Automatic database initialization failed: %s", exc)
+
+
+@app.get("/api/content/version", response_model=VersionResponse)
+def get_content_version():
+    return _content_version_row()
+
+
+@app.post("/api/admin/login")
+def admin_login(payload: AdminLoginRequest):
+    if payload.username != ADMIN_USERNAME or payload.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin credentials")
+
+    token = create_admin_token(payload.username)
+    return {
+        "token": token,
+        "username": payload.username,
+        "expires_in_hours": ADMIN_TOKEN_EXPIRES_HOURS,
+    }
+
+
+@app.get("/api/admin/session")
+def admin_session(_: dict[str, Any] = Depends(require_admin)):
+    return {"ok": True, "username": ADMIN_USERNAME}
+
+
+@app.get("/api/story-images")
+def list_story_images():
+    return {"items": _available_story_images()}
+
+
+@app.post("/api/upload-image")
+async def upload_image(
+    file: UploadFile = File(...),
+    _: dict[str, Any] = Depends(require_admin),
+):
+    extension = Path(file.filename or "upload").suffix.lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Unsupported image format")
+
+    filename = f"{uuid4().hex}{extension}"
+    target_path = UPLOAD_ROOT / filename
+    content = await file.read()
+    target_path.write_bytes(content)
+    bump_content_version()
+    return {"path": _public_image_path(filename), "filename": filename}
+
+
+@app.post("/api/write/upload-image")
+async def upload_writer_image(file: UploadFile = File(...)):
+    extension = Path(file.filename or "upload").suffix.lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Unsupported image format")
+
+    filename = f"{uuid4().hex}{extension}"
+    target_path = UPLOAD_ROOT / filename
+    target_path.write_bytes(await file.read())
+    bump_content_version()
+    return {"path": _public_image_path(filename), "filename": filename}
 
 
 @app.get("/api/bootstrap")
@@ -271,7 +506,7 @@ def bootstrap():
             "id": book["id"],
             "title": book["title"],
             "author": book["author"],
-            "cover_path": book["cover_path"],
+            "cover_path": _normalize_cover_path(book["cover_path"]),
             "accent_hex": book["accent_hex"],
         }
         for book in books
@@ -283,7 +518,7 @@ def bootstrap():
             "id": book["id"],
             "title": book["title"],
             "author": book["author"],
-            "cover_path": book["cover_path"],
+            "cover_path": _normalize_cover_path(book["cover_path"]),
             "accent_hex": book["accent_hex"],
         }
         for book in books
@@ -323,7 +558,7 @@ def bootstrap():
                 "id": row["book_id"],
                 "title": row["title"],
                 "author": row["author"],
-                "cover_path": row["cover_path"],
+                "cover_path": _normalize_cover_path(row["cover_path"]),
                 "accent_hex": row["accent_hex"],
             },
             "reading_status": row["reading_status"],
@@ -417,7 +652,10 @@ def bootstrap():
         "discover_tabs": discover_tabs,
         "recently_updated": recently_updated,
         "recently_completed": recently_completed,
-        "discover_books": books,
+        "discover_books": [
+            {**book, "cover_path": _normalize_cover_path(book["cover_path"])}
+            for book in books
+        ],
         "featured_book": featured_book,
         "explore_topics": explore_topics,
         "library_entries": library_payload,
@@ -467,6 +705,27 @@ def get_notifications(tab: str = Query(default="")):
     return {"items": rows}
 
 
+@app.post("/api/support/requests")
+def create_support_request(payload: SupportRequestCreateRequest):
+    request_id, affected = execute_write(
+        """
+        INSERT INTO support_requests (email, first_name, issue, subject, description, status)
+        VALUES (%s, %s, %s, %s, %s, 'open')
+        """,
+        (
+            payload.email,
+            payload.first_name,
+            payload.issue,
+            payload.subject,
+            payload.description,
+        ),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=400, detail="Failed to create support request")
+    bump_content_version()
+    return {"ok": True, "id": request_id}
+
+
 @app.get("/api/library")
 def get_library_entries():
     rows = fetch_all(
@@ -486,7 +745,7 @@ def get_library_entries():
                     "id": row["book_id"],
                     "title": row["title"],
                     "author": row["author"],
-                    "cover_path": row["cover_path"],
+                    "cover_path": _normalize_cover_path(row["cover_path"]),
                     "accent_hex": row["accent_hex"],
                 },
                 "reading_status": row["reading_status"],
@@ -518,6 +777,7 @@ def create_library_entry(payload: LibraryCreateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to create library entry")
+    bump_content_version()
     return {"ok": True}
 
 
@@ -549,6 +809,7 @@ def update_library_entry(entry_id: int, payload: LibraryUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update library entry")
+    bump_content_version()
     return {"ok": True}
 
 
@@ -557,6 +818,7 @@ def delete_library_entry(entry_id: int):
     _, affected = execute_write("DELETE FROM library_entries WHERE id=%s", (entry_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Library entry not found")
+    bump_content_version()
     return {"ok": True}
 
 
@@ -569,7 +831,12 @@ def get_writer_stories():
         ORDER BY id DESC
         """
     )
-    return {"items": rows}
+    return {
+        "items": [
+            {**row, "cover_path": _normalize_cover_path(row["cover_path"])}
+            for row in rows
+        ]
+    }
 
 
 @app.get("/api/write/stories/{story_id}/chapters")
@@ -617,6 +884,7 @@ def create_story_chapter(story_id: int, payload: ChapterCreateRequest):
             chapter_number,
         ),
     )
+    bump_content_version()
     return {"ok": True, "id": row_id}
 
 
@@ -647,6 +915,7 @@ def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update chapter")
+    bump_content_version()
     return {"ok": True}
 
 
@@ -655,6 +924,7 @@ def delete_story_chapter(chapter_id: int):
     _, affected = execute_write("DELETE FROM chapters WHERE id=%s", (chapter_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Chapter not found")
+    bump_content_version()
     return {"ok": True}
 
 
@@ -663,10 +933,17 @@ def create_writer_story(payload: StoryCreateRequest):
     story_id, _ = execute_write(
         """
         INSERT INTO books (title, author, description, cover_path, accent_hex, section_name, status_text, rating, genre, cta_label, sort_order)
-        VALUES (%s, %s, %s, '', '#557E7A', 'recently_updated', 'Draft', 0.0, %s, 'Read now', 999)
+        VALUES (%s, %s, %s, %s, '#557E7A', 'recently_updated', 'Draft', 0.0, %s, 'Read now', 999)
         """,
-        (payload.title, payload.author, payload.description, payload.genre),
+        (
+            payload.title,
+            payload.author,
+            payload.description,
+            payload.cover_path,
+            payload.genre,
+        ),
     )
+    bump_content_version()
     return {"ok": True, "id": story_id}
 
 
@@ -680,7 +957,7 @@ def update_writer_story(story_id: int, payload: StoryUpdateRequest):
     _, affected = execute_write(
         """
         UPDATE books
-        SET title=%s, author=%s, description=%s, genre=%s
+        SET title=%s, author=%s, description=%s, genre=%s, cover_path=%s
         WHERE id=%s
         """,
         (
@@ -688,11 +965,13 @@ def update_writer_story(story_id: int, payload: StoryUpdateRequest):
             payload.author or current["author"],
             payload.description or current["description"],
             payload.genre or current["genre"],
+            payload.cover_path if payload.cover_path is not None else current["cover_path"],
             story_id,
         ),
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update story")
+    bump_content_version()
     return {"ok": True}
 
 
@@ -701,11 +980,12 @@ def delete_writer_story(story_id: int):
     _, affected = execute_write("DELETE FROM books WHERE id=%s", (story_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Story not found")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/bootstrap")
-def admin_bootstrap():
+def admin_bootstrap(_: dict[str, Any] = Depends(require_admin)):
     categories = fetch_all(
         "SELECT id, name, topic_count, tab_group, sort_order FROM categories ORDER BY tab_group, sort_order, id"
     )
@@ -735,16 +1015,23 @@ def admin_bootstrap():
     achievements = fetch_all(
         "SELECT id, group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order FROM achievements ORDER BY group_order, sort_order, id"
     )
+    support_requests = fetch_all(
+        "SELECT id, email, first_name, issue, subject, description, status, created_at FROM support_requests ORDER BY created_at DESC, id DESC"
+    )
 
     return {
         "categories": categories,
-        "books": books,
+        "books": [
+            {**book, "cover_path": _normalize_cover_path(book["cover_path"])}
+            for book in books
+        ],
         "notifications": notifications,
         "menu_items": menu_items,
         "write_screen": write_screen_rows[0] if write_screen_rows else None,
         "profile": profile_rows[0] if profile_rows else None,
         "reading_lists": reading_lists,
         "achievements": achievements,
+        "support_requests": support_requests,
         "stats": {
             "category_count": len(categories),
             "book_count": len(books),
@@ -752,23 +1039,56 @@ def admin_bootstrap():
             "menu_item_count": len(menu_items),
             "reading_list_count": len(reading_lists),
             "achievement_count": len(achievements),
+            "support_request_count": len(support_requests),
         },
     }
 
 
+@app.get("/api/admin/support-requests")
+def admin_get_support_requests(_: dict[str, Any] = Depends(require_admin)):
+    rows = fetch_all(
+        "SELECT id, email, first_name, issue, subject, description, status, created_at FROM support_requests ORDER BY created_at DESC, id DESC"
+    )
+    return {"items": rows}
+
+
+@app.put("/api/admin/support-requests/{request_id}")
+def admin_update_support_request(
+    request_id: int,
+    payload: SupportRequestUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
+    _, affected = execute_write(
+        "UPDATE support_requests SET status=%s WHERE id=%s",
+        (payload.status, request_id),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=404, detail="Support request not found")
+    bump_content_version()
+    return {"ok": True}
+
+
 @app.post("/api/admin/categories")
-def admin_create_category(payload: CategoryCreateRequest):
+def admin_create_category(
+    payload: CategoryCreateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write(
         "INSERT INTO categories (name, topic_count, tab_group, sort_order) VALUES (%s, %s, %s, %s)",
         (payload.name, payload.topic_count, payload.tab_group, payload.sort_order),
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to create category")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.put("/api/admin/categories/{category_id}")
-def admin_update_category(category_id: int, payload: CategoryUpdateRequest):
+def admin_update_category(
+    category_id: int,
+    payload: CategoryUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT * FROM categories WHERE id=%s", (category_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -790,19 +1110,27 @@ def admin_update_category(category_id: int, payload: CategoryUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update category")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.delete("/api/admin/categories/{category_id}")
-def admin_delete_category(category_id: int):
+def admin_delete_category(
+    category_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write("DELETE FROM categories WHERE id=%s", (category_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Category not found")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.post("/api/admin/books")
-def admin_create_book(payload: AdminBookCreateRequest):
+def admin_create_book(
+    payload: AdminBookCreateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     book_id, _ = execute_write(
         """
         INSERT INTO books (
@@ -825,11 +1153,16 @@ def admin_create_book(payload: AdminBookCreateRequest):
             payload.sort_order,
         ),
     )
+    bump_content_version()
     return {"ok": True, "id": book_id}
 
 
 @app.put("/api/admin/books/{book_id}")
-def admin_update_book(book_id: int, payload: AdminBookUpdateRequest):
+def admin_update_book(
+    book_id: int,
+    payload: AdminBookUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT * FROM books WHERE id=%s", (book_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -859,19 +1192,24 @@ def admin_update_book(book_id: int, payload: AdminBookUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update book")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.delete("/api/admin/books/{book_id}")
-def admin_delete_book(book_id: int):
+def admin_delete_book(
+    book_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write("DELETE FROM books WHERE id=%s", (book_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Book not found")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/notifications")
-def admin_get_notifications():
+def admin_get_notifications(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
         "SELECT id, tab_name, title, message, created_at, sort_order FROM notifications ORDER BY sort_order, id"
     )
@@ -879,7 +1217,10 @@ def admin_get_notifications():
 
 
 @app.post("/api/admin/notifications")
-def admin_create_notification(payload: AdminNotificationCreateRequest):
+def admin_create_notification(
+    payload: AdminNotificationCreateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     row_id, _ = execute_write(
         """
         INSERT INTO notifications (tab_name, title, message, created_at, sort_order)
@@ -893,6 +1234,7 @@ def admin_create_notification(payload: AdminNotificationCreateRequest):
             payload.sort_order,
         ),
     )
+    bump_content_version()
     return {"ok": True, "id": row_id}
 
 
@@ -900,6 +1242,7 @@ def admin_create_notification(payload: AdminNotificationCreateRequest):
 def admin_update_notification(
     notification_id: int,
     payload: AdminNotificationUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
 ):
     rows = fetch_all("SELECT * FROM notifications WHERE id=%s", (notification_id,))
     if not rows:
@@ -923,19 +1266,24 @@ def admin_update_notification(
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update notification")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.delete("/api/admin/notifications/{notification_id}")
-def admin_delete_notification(notification_id: int):
+def admin_delete_notification(
+    notification_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write("DELETE FROM notifications WHERE id=%s", (notification_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Notification not found")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/menu-items")
-def admin_get_menu_items():
+def admin_get_menu_items(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
         "SELECT id, section_name, section_order, label, icon_name, route_name, sort_order FROM menu_items ORDER BY section_order, sort_order, id"
     )
@@ -943,7 +1291,10 @@ def admin_get_menu_items():
 
 
 @app.post("/api/admin/menu-items")
-def admin_create_menu_item(payload: AdminMenuItemCreateRequest):
+def admin_create_menu_item(
+    payload: AdminMenuItemCreateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     row_id, _ = execute_write(
         """
         INSERT INTO menu_items (section_name, section_order, label, icon_name, route_name, sort_order)
@@ -958,11 +1309,16 @@ def admin_create_menu_item(payload: AdminMenuItemCreateRequest):
             payload.sort_order,
         ),
     )
+    bump_content_version()
     return {"ok": True, "id": row_id}
 
 
 @app.put("/api/admin/menu-items/{menu_item_id}")
-def admin_update_menu_item(menu_item_id: int, payload: AdminMenuItemUpdateRequest):
+def admin_update_menu_item(
+    menu_item_id: int,
+    payload: AdminMenuItemUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT * FROM menu_items WHERE id=%s", (menu_item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Menu item not found")
@@ -986,19 +1342,24 @@ def admin_update_menu_item(menu_item_id: int, payload: AdminMenuItemUpdateReques
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update menu item")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.delete("/api/admin/menu-items/{menu_item_id}")
-def admin_delete_menu_item(menu_item_id: int):
+def admin_delete_menu_item(
+    menu_item_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write("DELETE FROM menu_items WHERE id=%s", (menu_item_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Menu item not found")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/write-screen")
-def admin_get_write_screen():
+def admin_get_write_screen(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
         "SELECT id, manage_tabs, story_tabs, filter_label, sort_label, empty_title, empty_cta FROM write_screen ORDER BY id ASC LIMIT 1"
     )
@@ -1008,7 +1369,10 @@ def admin_get_write_screen():
 
 
 @app.put("/api/admin/write-screen")
-def admin_update_write_screen(payload: AdminWriteScreenUpdateRequest):
+def admin_update_write_screen(
+    payload: AdminWriteScreenUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT id FROM write_screen ORDER BY id ASC LIMIT 1")
     if not rows:
         execute_write(
@@ -1025,6 +1389,7 @@ def admin_update_write_screen(payload: AdminWriteScreenUpdateRequest):
                 payload.empty_cta,
             ),
         )
+        bump_content_version()
         return {"ok": True}
 
     _, affected = execute_write(
@@ -1045,11 +1410,12 @@ def admin_update_write_screen(payload: AdminWriteScreenUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update write screen config")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/profile")
-def admin_get_profile():
+def admin_get_profile(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
         "SELECT id, display_name, username, following, followers, blocked, chapters_read, social_karma, day_streak FROM profiles ORDER BY id ASC LIMIT 1"
     )
@@ -1059,7 +1425,10 @@ def admin_get_profile():
 
 
 @app.put("/api/admin/profile")
-def admin_update_profile(payload: AdminProfileUpdateRequest):
+def admin_update_profile(
+    payload: AdminProfileUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT id FROM profiles ORDER BY id ASC LIMIT 1")
     if not rows:
         execute_write(
@@ -1078,6 +1447,7 @@ def admin_update_profile(payload: AdminProfileUpdateRequest):
                 payload.day_streak,
             ),
         )
+        bump_content_version()
         return {"ok": True}
 
     _, affected = execute_write(
@@ -1101,11 +1471,12 @@ def admin_update_profile(payload: AdminProfileUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update profile")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/reading-lists")
-def admin_get_reading_lists():
+def admin_get_reading_lists(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
         "SELECT id, profile_id, name, story_count, cover_path, sort_order FROM reading_lists ORDER BY sort_order, id"
     )
@@ -1113,7 +1484,10 @@ def admin_get_reading_lists():
 
 
 @app.post("/api/admin/reading-lists")
-def admin_create_reading_list(payload: AdminReadingListCreateRequest):
+def admin_create_reading_list(
+    payload: AdminReadingListCreateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     row_id, _ = execute_write(
         """
         INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order)
@@ -1127,11 +1501,16 @@ def admin_create_reading_list(payload: AdminReadingListCreateRequest):
             payload.sort_order,
         ),
     )
+    bump_content_version()
     return {"ok": True, "id": row_id}
 
 
 @app.put("/api/admin/reading-lists/{list_id}")
-def admin_update_reading_list(list_id: int, payload: AdminReadingListUpdateRequest):
+def admin_update_reading_list(
+    list_id: int,
+    payload: AdminReadingListUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT * FROM reading_lists WHERE id=%s", (list_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Reading list not found")
@@ -1154,19 +1533,24 @@ def admin_update_reading_list(list_id: int, payload: AdminReadingListUpdateReque
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update reading list")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.delete("/api/admin/reading-lists/{list_id}")
-def admin_delete_reading_list(list_id: int):
+def admin_delete_reading_list(
+    list_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write("DELETE FROM reading_lists WHERE id=%s", (list_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Reading list not found")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.get("/api/admin/achievements")
-def admin_get_achievements():
+def admin_get_achievements(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
         "SELECT id, group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order FROM achievements ORDER BY group_order, sort_order, id"
     )
@@ -1174,7 +1558,10 @@ def admin_get_achievements():
 
 
 @app.post("/api/admin/achievements")
-def admin_create_achievement(payload: AdminAchievementCreateRequest):
+def admin_create_achievement(
+    payload: AdminAchievementCreateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     row_id, _ = execute_write(
         """
         INSERT INTO achievements (group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order)
@@ -1191,11 +1578,16 @@ def admin_create_achievement(payload: AdminAchievementCreateRequest):
             payload.sort_order,
         ),
     )
+    bump_content_version()
     return {"ok": True, "id": row_id}
 
 
 @app.put("/api/admin/achievements/{achievement_id}")
-def admin_update_achievement(achievement_id: int, payload: AdminAchievementUpdateRequest):
+def admin_update_achievement(
+    achievement_id: int,
+    payload: AdminAchievementUpdateRequest,
+    _: dict[str, Any] = Depends(require_admin),
+):
     rows = fetch_all("SELECT * FROM achievements WHERE id=%s", (achievement_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="Achievement not found")
@@ -1222,12 +1614,17 @@ def admin_update_achievement(achievement_id: int, payload: AdminAchievementUpdat
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update achievement")
+    bump_content_version()
     return {"ok": True}
 
 
 @app.delete("/api/admin/achievements/{achievement_id}")
-def admin_delete_achievement(achievement_id: int):
+def admin_delete_achievement(
+    achievement_id: int,
+    _: dict[str, Any] = Depends(require_admin),
+):
     _, affected = execute_write("DELETE FROM achievements WHERE id=%s", (achievement_id,))
     if affected == 0:
         raise HTTPException(status_code=404, detail="Achievement not found")
+    bump_content_version()
     return {"ok": True}

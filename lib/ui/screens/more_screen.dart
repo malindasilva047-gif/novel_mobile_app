@@ -2,12 +2,19 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../data/models/app_bootstrap.dart';
+import '../../data/services/api_service.dart';
 import 'profile_screen.dart';
+import 'support_screen.dart';
 
 class MoreScreen extends StatelessWidget {
-  const MoreScreen({super.key, required this.data});
+  const MoreScreen({
+    super.key,
+    required this.data,
+    required this.apiService,
+  });
 
   final AppBootstrap data;
+  final ApiService apiService;
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +27,24 @@ class MoreScreen extends StatelessWidget {
             if (item.route == 'profile') {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => ProfileScreen(profile: data.profile),
+                  builder: (_) => ProfileScreen(
+                    profile: data.profile,
+                    apiService: apiService,
+                  ),
+                ),
+              );
+              return;
+            }
+
+            final routeName = item.route.toLowerCase();
+            final label = item.label.toLowerCase();
+            if (routeName.contains('support') || routeName.contains('help') || label.contains('support') || label.contains('request')) {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SupportScreen(
+                    title: item.label,
+                    apiService: apiService,
+                  ),
                 ),
               );
               return;

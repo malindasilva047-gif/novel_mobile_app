@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../data/services/api_service.dart';
@@ -18,7 +21,9 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   final _summaryController = TextEditingController();
   final _authorController = TextEditingController();
   final _genreController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
   bool _saving = false;
+  String _coverPath = '';
 
   bool get _isEditing => widget.story != null;
 
@@ -30,7 +35,26 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       _summaryController.text = widget.story!['description']?.toString() ?? '';
       _authorController.text = widget.story!['author']?.toString() ?? '';
       _genreController.text = widget.story!['genre']?.toString() ?? '';
+      _coverPath = widget.story!['cover_path']?.toString() ?? '';
     }
+  }
+
+  Future<void> _pickCover() async {
+    final picked = await _imagePicker.pickImage(source: ImageSource.gallery);
+    if (picked == null) {
+      return;
+    }
+
+    final payload = await widget.apiService.uploadWriterImage(File(picked.path));
+    final path = payload['path']?.toString() ?? '';
+    if (!mounted || path.isEmpty) {
+      return;
+    }
+
+    setState(() => _coverPath = path);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Cover image uploaded')),
+    );
   }
 
   @override
@@ -62,6 +86,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         'description': summary,
         'author': author.isEmpty ? 'Me' : author,
         'genre': genre.isEmpty ? 'Fiction' : genre,
+        'cover_path': _coverPath,
       };
 
       if (_isEditing) {
@@ -116,22 +141,30 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
           children: [
             // Cover image
             GestureDetector(
-              onTap: () {
-                // Future: image picker
-              },
+              onTap: _pickCover,
               child: Container(
                 width: 120,
                 height: 170,
                 decoration: BoxDecoration(
                   color: const Color(0xFF2979FF),
                   borderRadius: BorderRadius.circular(8),
+                  image: _coverPath.isEmpty
+                      ? null
+                      : DecorationImage(
+                          image: NetworkImage(
+                            widget.apiService.resolveAssetUrl(_coverPath),
+                          ),
+                          fit: BoxFit.cover,
+                        ),
                 ),
-                child: const Icon(Icons.book_rounded, color: Colors.white70, size: 48),
+                child: _coverPath.isEmpty
+                    ? const Icon(Icons.book_rounded, color: Colors.white70, size: 48)
+                    : null,
               ),
             ),
             const SizedBox(height: 8),
             TextButton(
-              onPressed: () {},
+              onPressed: _pickCover,
               child: const Text(
                 'Change Cover',
                 style: TextStyle(color: AppTheme.brand, fontSize: 14),
