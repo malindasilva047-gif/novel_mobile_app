@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models/app_bootstrap.dart';
 import '../../data/services/api_service.dart';
+import '../../data/services/auth_service.dart';
 import 'profile_screen.dart';
 import 'support_screen.dart';
 
@@ -11,53 +12,126 @@ class MoreScreen extends StatelessWidget {
     super.key,
     required this.data,
     required this.apiService,
+    required this.session,
+    required this.onSignOut,
   });
 
   final AppBootstrap data;
   final ApiService apiService;
+  final AuthSession session;
+  final Future<void> Function() onSignOut;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 20),
-      children: data.menuSections.map((section) {
-        return _Section(
-          section: section,
-          onTap: (item) {
-            if (item.route == 'profile') {
+      children: [
+        _AccountCard(session: session, onSignOut: onSignOut),
+        const SizedBox(height: 10),
+        ...data.menuSections.map((section) {
+          return _Section(
+            section: section,
+            onTap: (item) async {
+              if (item.route == 'profile') {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ProfileScreen(
+                      profile: data.profile,
+                      apiService: apiService,
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              final routeName = item.route.toLowerCase();
+              final label = item.label.toLowerCase();
+              if (routeName.contains('logout') || label.contains('logout')) {
+                await onSignOut();
+                return;
+              }
+
+              if (routeName.contains('support') || routeName.contains('help') || label.contains('support') || label.contains('request')) {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => SupportScreen(
+                      title: item.label,
+                      apiService: apiService,
+                    ),
+                  ),
+                );
+                return;
+              }
+
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => ProfileScreen(
-                    profile: data.profile,
-                    apiService: apiService,
-                  ),
+                  builder: (_) => _PlaceholderScreen(title: item.label),
                 ),
               );
-              return;
-            }
+            },
+          );
+        }),
+      ],
+    );
+  }
+}
 
-            final routeName = item.route.toLowerCase();
-            final label = item.label.toLowerCase();
-            if (routeName.contains('support') || routeName.contains('help') || label.contains('support') || label.contains('request')) {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => SupportScreen(
-                    title: item.label,
-                    apiService: apiService,
-                  ),
+class _AccountCard extends StatelessWidget {
+  const _AccountCard({required this.session, required this.onSignOut});
+
+  final AuthSession session;
+  final Future<void> Function() onSignOut;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 24,
+            backgroundColor: AppTheme.brand.withValues(alpha: 0.12),
+            backgroundImage: session.photoUrl != null && session.photoUrl!.isNotEmpty
+                ? NetworkImage(session.photoUrl!)
+                : null,
+            child: session.photoUrl == null || session.photoUrl!.isEmpty
+                ? Text(
+                    session.displayName.substring(0, 1).toUpperCase(),
+                    style: const TextStyle(
+                      color: AppTheme.brand,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                : null,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  session.displayName,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-              );
-              return;
-            }
-
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => _PlaceholderScreen(title: item.label),
-              ),
-            );
-          },
-        );
-      }).toList(),
+                const SizedBox(height: 2),
+                Text(
+                  session.email,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: onSignOut,
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
     );
   }
 }

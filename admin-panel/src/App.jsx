@@ -625,7 +625,11 @@ export default function App() {
                 options={["open", "in_progress", "resolved"]}
                 onChange={(value) => quickUpdate(() => updateSupportRequest(row.id, { status: value }), "Support request updated")}
               />,
-              <button type="button" onClick={() => window.alert(row.description || "No description")}>View</button>,
+              <button type="button" onClick={() => window.alert([
+                row.description || "No description",
+                row.device_type ? `Device: ${row.device_type}` : "",
+                row.attachment_path ? `Attachment: ${API_BASE_URL}${row.attachment_path}` : "",
+              ].filter(Boolean).join("\n\n"))}>View</button>,
             ])}
           />
         </article>

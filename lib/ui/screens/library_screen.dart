@@ -23,6 +23,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   late List<LibraryEntryModel> _entries;
+  late List<ReadingListModel> _readingLists;
   bool _loading = false;
 
   @override
@@ -30,7 +31,9 @@ class _LibraryScreenState extends State<LibraryScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _entries = List<LibraryEntryModel>.from(widget.data.libraryEntries);
+    _readingLists = List<ReadingListModel>.from(widget.data.profile.readingLists);
     _loadEntries();
+    _loadReadingLists();
   }
 
   @override
@@ -49,6 +52,57 @@ class _LibraryScreenState extends State<LibraryScreen>
       _entries = rows.map((row) => LibraryEntryModel.fromMap(row)).toList();
       _loading = false;
     });
+  }
+
+  Future<void> _loadReadingLists() async {
+    final rows = await widget.apiService.fetchReadingLists();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _readingLists = rows
+          .map((row) => ReadingListModel.fromMap(row))
+          .toList();
+    });
+  }
+
+  Future<void> _createReadingList() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create New List'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'List name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (name == null || name.trim().isEmpty) {
+      return;
+    }
+
+    await widget.apiService.createReadingList({
+      'profile_id': 1,
+      'name': name.trim(),
+      'story_count': 0,
+      'cover_path': '',
+      'sort_order': _readingLists.length + 1,
+    });
+    await _loadReadingLists();
   }
 
   Future<void> _removeEntry(LibraryEntryModel entry) async {
@@ -146,8 +200,9 @@ class _LibraryScreenState extends State<LibraryScreen>
 
               // Reading Lists
               _ReadingListsTab(
-                lists: widget.data.profile.readingLists,
+                lists: _readingLists,
                 apiService: widget.apiService,
+                onCreateList: _createReadingList,
               ),
 
               // History
@@ -241,10 +296,15 @@ class _CurrentReadsTab extends StatelessWidget {
 }
 
 class _ReadingListsTab extends StatelessWidget {
-  const _ReadingListsTab({required this.lists, required this.apiService});
+  const _ReadingListsTab({
+    required this.lists,
+    required this.apiService,
+    required this.onCreateList,
+  });
 
   final List<ReadingListModel> lists;
   final ApiService apiService;
+  final Future<void> Function() onCreateList;
 
   @override
   Widget build(BuildContext context) {
@@ -296,13 +356,7 @@ class _ReadingListsTab extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Create reading lists from the admin panel for now.'),
-                ),
-              );
-            },
+            onPressed: onCreateList,
             icon: const Icon(Icons.add_rounded),
             label: const Text('Create New List'),
           ),

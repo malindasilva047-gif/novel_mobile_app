@@ -8,6 +8,8 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
+from urllib.request import urlopen
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
@@ -30,6 +32,7 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin_Supun")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Ux3@f=7x2")
 ADMIN_TOKEN_EXPIRES_HOURS = int(os.getenv("ADMIN_TOKEN_EXPIRES_HOURS", "24"))
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 app.add_middleware(
     CORSMiddleware,
@@ -80,12 +83,18 @@ class ChapterCreateRequest(BaseModel):
     title: str
     content: str
     chapter_number: int | None = None
+    notes: str | None = None
+    submission_status: str | None = None
+    scheduled_for: str | None = None
 
 
 class ChapterUpdateRequest(BaseModel):
     title: str | None = None
     content: str | None = None
     chapter_number: int | None = None
+    notes: str | None = None
+    submission_status: str | None = None
+    scheduled_for: str | None = None
 
 
 class CategoryCreateRequest(BaseModel):
@@ -233,10 +242,17 @@ class SupportRequestCreateRequest(BaseModel):
     issue: str
     subject: str
     description: str
+    device_type: str = ""
+    attachment_path: str = ""
 
 
 class SupportRequestUpdateRequest(BaseModel):
     status: str
+
+
+class GoogleAuthRequest(BaseModel):
+    id_token: str | None = None
+    access_token: str | None = None
 
 
 class VersionResponse(BaseModel):
@@ -400,6 +416,93 @@ def _available_story_images() -> list[dict[str, str]]:
     return items
 
 
+def _fetch_google_json(endpoint: str, query: dict[str, str]) -> dict[str, Any]:
+    url = f"{endpoint}?{urlencode(query)}"
+    with urlopen(url, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _verify_google_payload(payload: GoogleAuthRequest) -> dict[str, Any]:
+    if payload.id_token:
+        token_info = _fetch_google_json(
+            "https://oauth2.googleapis.com/tokeninfo",
+            {"id_token": payload.id_token},
+        )
+        audience = token_info.get("aud", "")
+        if GOOGLE_CLIENT_ID and audience != GOOGLE_CLIENT_ID:
+            raise HTTPException(status_code=401, detail="Google audience mismatch")
+
+        email = token_info.get("email", "")
+        subject = token_info.get("sub", "")
+        if not email or not subject:
+            raise HTTPException(status_code=401, detail="Invalid Google token")
+
+        return {
+            "email": email,
+            "subject": subject,
+            "display_name": token_info.get("name") or email.split("@")[0],
+            "photo_url": token_info.get("picture") or "",
+        }
+
+    if payload.access_token:
+        token_info = _fetch_google_json(
+            "https://oauth2.googleapis.com/tokeninfo",
+            {"access_token": payload.access_token},
+        )
+        audience = token_info.get("aud", "")
+        if GOOGLE_CLIENT_ID and audience != GOOGLE_CLIENT_ID:
+            raise HTTPException(status_code=401, detail="Google audience mismatch")
+
+        user_info = _fetch_google_json(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            {"access_token": payload.access_token},
+        )
+        email = user_info.get("email", "")
+        subject = user_info.get("id", "")
+        if not email or not subject:
+            raise HTTPException(status_code=401, detail="Invalid Google token")
+
+        return {
+            "email": email,
+            "subject": subject,
+            "display_name": user_info.get("name") or email.split("@")[0],
+            "photo_url": user_info.get("picture") or "",
+        }
+
+    raise HTTPException(status_code=400, detail="Missing Google token")
+
+
+def _parse_optional_datetime(value: str | None) -> datetime | None:
+    if value is None or value.strip() == "":
+        return None
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid scheduled date") from exc
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _record_chapter_revision(
+    chapter_id: int,
+    title: str,
+    content: str,
+    notes: str,
+    submission_status: str,
+    scheduled_for: datetime | None,
+) -> None:
+    execute_write(
+        """
+        INSERT INTO chapter_revisions (chapter_id, title, content, notes, submission_status, scheduled_for)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (chapter_id, title, content, notes, submission_status, scheduled_for),
+    )
+
+
 @app.get("/")
 def healthcheck():
     return {"message": "Novel Mobile backend is running."}
@@ -433,6 +536,51 @@ def admin_login(payload: AdminLoginRequest):
         "token": token,
         "username": payload.username,
         "expires_in_hours": ADMIN_TOKEN_EXPIRES_HOURS,
+    }
+
+
+@app.post("/api/auth/google")
+def authenticate_google(payload: GoogleAuthRequest):
+    google_user = _verify_google_payload(payload)
+    rows = fetch_all("SELECT id FROM app_users WHERE email=%s LIMIT 1", (google_user["email"],))
+
+    if rows:
+        user_id = rows[0]["id"]
+        execute_write(
+            """
+            UPDATE app_users
+            SET provider=%s, provider_subject=%s, display_name=%s, photo_url=%s, last_login_at=CURRENT_TIMESTAMP
+            WHERE id=%s
+            """,
+            (
+                "google",
+                google_user["subject"],
+                google_user["display_name"],
+                google_user["photo_url"],
+                user_id,
+            ),
+        )
+    else:
+        user_id, _ = execute_write(
+            """
+            INSERT INTO app_users (email, provider, provider_subject, display_name, photo_url)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                google_user["email"],
+                "google",
+                google_user["subject"],
+                google_user["display_name"],
+                google_user["photo_url"],
+            ),
+        )
+
+    return {
+        "id": user_id,
+        "email": google_user["email"],
+        "display_name": google_user["display_name"],
+        "photo_url": google_user["photo_url"],
+        "provider": "google",
     }
 
 
@@ -473,6 +621,18 @@ async def upload_writer_image(file: UploadFile = File(...)):
     target_path = UPLOAD_ROOT / filename
     target_path.write_bytes(await file.read())
     bump_content_version()
+    return {"path": _public_image_path(filename), "filename": filename}
+
+
+@app.post("/api/support/upload-attachment")
+async def upload_support_attachment(file: UploadFile = File(...)):
+    extension = Path(file.filename or "upload").suffix.lower()
+    if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Unsupported attachment format")
+
+    filename = f"support-{uuid4().hex}{extension}"
+    target_path = UPLOAD_ROOT / filename
+    target_path.write_bytes(await file.read())
     return {"path": _public_image_path(filename), "filename": filename}
 
 
@@ -709,8 +869,11 @@ def get_notifications(tab: str = Query(default="")):
 def create_support_request(payload: SupportRequestCreateRequest):
     request_id, affected = execute_write(
         """
-        INSERT INTO support_requests (email, first_name, issue, subject, description, status)
-        VALUES (%s, %s, %s, %s, %s, 'open')
+        INSERT INTO support_requests (
+            email, first_name, issue, subject, description,
+            device_type, attachment_path, status
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'open')
         """,
         (
             payload.email,
@@ -718,6 +881,8 @@ def create_support_request(payload: SupportRequestCreateRequest):
             payload.issue,
             payload.subject,
             payload.description,
+            payload.device_type,
+            payload.attachment_path,
         ),
     )
     if affected == 0:
@@ -822,6 +987,33 @@ def delete_library_entry(entry_id: int):
     return {"ok": True}
 
 
+@app.get("/api/reading-lists")
+def get_public_reading_lists():
+    rows = fetch_all(
+        "SELECT id, profile_id, name, story_count, cover_path, sort_order FROM reading_lists ORDER BY sort_order, id"
+    )
+    return {"items": rows}
+
+
+@app.post("/api/reading-lists")
+def create_public_reading_list(payload: AdminReadingListCreateRequest):
+    row_id, _ = execute_write(
+        """
+        INSERT INTO reading_lists (profile_id, name, story_count, cover_path, sort_order)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            payload.profile_id,
+            payload.name,
+            payload.story_count,
+            payload.cover_path,
+            payload.sort_order,
+        ),
+    )
+    bump_content_version()
+    return {"ok": True, "id": row_id}
+
+
 @app.get("/api/write/stories")
 def get_writer_stories():
     rows = fetch_all(
@@ -847,14 +1039,48 @@ def get_story_chapters(story_id: int):
 
     rows = fetch_all(
         """
-        SELECT id, story_id, chapter_number, title, content, sort_order, created_at, updated_at
+        SELECT id, story_id, chapter_number, title, content, notes, submission_status, scheduled_for,
+               sort_order, created_at, updated_at
         FROM chapters
         WHERE story_id=%s
         ORDER BY chapter_number, sort_order, id
         """,
         (story_id,),
     )
-    return {"items": rows}
+    return {
+        "items": [
+            {
+                **row,
+                "scheduled_for": _serialize_datetime(row.get("scheduled_for")),
+                "created_at": _serialize_datetime(row.get("created_at")),
+                "updated_at": _serialize_datetime(row.get("updated_at")),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.get("/api/write/chapters/{chapter_id}/revisions")
+def get_story_chapter_revisions(chapter_id: int):
+    rows = fetch_all(
+        """
+        SELECT id, chapter_id, title, notes, submission_status, scheduled_for, created_at
+        FROM chapter_revisions
+        WHERE chapter_id=%s
+        ORDER BY created_at DESC, id DESC
+        """,
+        (chapter_id,),
+    )
+    return {
+        "items": [
+            {
+                **row,
+                "scheduled_for": _serialize_datetime(row.get("scheduled_for")),
+                "created_at": _serialize_datetime(row.get("created_at")),
+            }
+            for row in rows
+        ]
+    }
 
 
 @app.post("/api/write/stories/{story_id}/chapters")
@@ -871,18 +1097,33 @@ def create_story_chapter(story_id: int, payload: ChapterCreateRequest):
         )
         chapter_number = next_rows[0]["next_chapter"]
 
+    submission_status = (payload.submission_status or "draft").strip() or "draft"
+    scheduled_for = _parse_optional_datetime(payload.scheduled_for)
     row_id, _ = execute_write(
         """
-        INSERT INTO chapters (story_id, chapter_number, title, content, sort_order)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO chapters (
+            story_id, chapter_number, title, content, notes, submission_status, scheduled_for, sort_order
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             story_id,
             chapter_number,
             payload.title,
             payload.content,
+            payload.notes or "",
+            submission_status,
+            scheduled_for,
             chapter_number,
         ),
+    )
+    _record_chapter_revision(
+        row_id,
+        payload.title,
+        payload.content,
+        payload.notes or "",
+        submission_status,
+        scheduled_for,
     )
     bump_content_version()
     return {"ok": True, "id": row_id}
@@ -895,18 +1136,31 @@ def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     current = rows[0]
+    next_title = payload.title or current["title"]
+    next_content = payload.content if payload.content is not None else current["content"]
+    next_notes = payload.notes if payload.notes is not None else current.get("notes", "")
+    next_status = (payload.submission_status or current.get("submission_status") or "draft").strip() or "draft"
+    next_scheduled_for = (
+        _parse_optional_datetime(payload.scheduled_for)
+        if payload.scheduled_for is not None
+        else current.get("scheduled_for")
+    )
     _, affected = execute_write(
         """
         UPDATE chapters
-        SET chapter_number=%s, title=%s, content=%s, sort_order=%s
+        SET chapter_number=%s, title=%s, content=%s, notes=%s, submission_status=%s,
+            scheduled_for=%s, sort_order=%s
         WHERE id=%s
         """,
         (
             payload.chapter_number
             if payload.chapter_number is not None
             else current["chapter_number"],
-            payload.title or current["title"],
-            payload.content if payload.content is not None else current["content"],
+            next_title,
+            next_content,
+            next_notes,
+            next_status,
+            next_scheduled_for,
             payload.chapter_number
             if payload.chapter_number is not None
             else current["sort_order"],
@@ -915,6 +1169,14 @@ def update_story_chapter(chapter_id: int, payload: ChapterUpdateRequest):
     )
     if affected == 0:
         raise HTTPException(status_code=400, detail="Failed to update chapter")
+    _record_chapter_revision(
+        chapter_id,
+        next_title,
+        next_content,
+        next_notes,
+        next_status,
+        next_scheduled_for,
+    )
     bump_content_version()
     return {"ok": True}
 
@@ -1016,7 +1278,7 @@ def admin_bootstrap(_: dict[str, Any] = Depends(require_admin)):
         "SELECT id, group_name, group_order, title, subtitle, progress_label, badge_value, style, sort_order FROM achievements ORDER BY group_order, sort_order, id"
     )
     support_requests = fetch_all(
-        "SELECT id, email, first_name, issue, subject, description, status, created_at FROM support_requests ORDER BY created_at DESC, id DESC"
+        "SELECT id, email, first_name, issue, subject, description, device_type, attachment_path, status, created_at FROM support_requests ORDER BY created_at DESC, id DESC"
     )
 
     return {
@@ -1047,7 +1309,7 @@ def admin_bootstrap(_: dict[str, Any] = Depends(require_admin)):
 @app.get("/api/admin/support-requests")
 def admin_get_support_requests(_: dict[str, Any] = Depends(require_admin)):
     rows = fetch_all(
-        "SELECT id, email, first_name, issue, subject, description, status, created_at FROM support_requests ORDER BY created_at DESC, id DESC"
+        "SELECT id, email, first_name, issue, subject, description, device_type, attachment_path, status, created_at FROM support_requests ORDER BY created_at DESC, id DESC"
     )
     return {"items": rows}
 

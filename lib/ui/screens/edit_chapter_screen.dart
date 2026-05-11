@@ -32,6 +32,9 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
 
   int? _chapterId;
   int _chapterNumber = 1;
+  String _chapterNotes = '';
+  String _submissionStatus = 'draft';
+  DateTime? _scheduledFor;
 
   int get _wordCount {
     final text = _textController.text.trim();
@@ -68,6 +71,16 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
             ? chapter['title'].toString()
             : widget.chapterTitle;
         _textController.text = chapter['content']?.toString() ?? '';
+        _chapterNotes = chapter['notes']?.toString() ?? '';
+        _submissionStatus =
+          chapter['submission_status']?.toString().trim().isNotEmpty == true
+          ? chapter['submission_status'].toString()
+          : 'draft';
+        final scheduledFor = chapter['scheduled_for']?.toString();
+        _scheduledFor =
+          scheduledFor != null && scheduledFor.isNotEmpty
+          ? DateTime.tryParse(scheduledFor)
+          : null;
       }
     } catch (_) {
       if (mounted) {
@@ -82,7 +95,11 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
     }
   }
 
-  Future<void> _saveChapter() async {
+  Future<void> _saveChapter({
+    String? submissionStatus,
+    DateTime? scheduledFor,
+    String? successMessage,
+  }) async {
     final title = _titleController.text.trim();
     final content = _textController.text.trim();
     if (title.isEmpty) {
@@ -94,10 +111,15 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
 
     setState(() => _isSaving = true);
     try {
+      final nextSubmissionStatus = submissionStatus ?? _submissionStatus;
+      final nextScheduledFor = scheduledFor ?? _scheduledFor;
       final payload = {
         'title': title,
         'content': content,
         'chapter_number': _chapterNumber,
+        'notes': _chapterNotes,
+        'submission_status': nextSubmissionStatus,
+        'scheduled_for': nextScheduledFor?.toIso8601String(),
       };
 
       if (_chapterId == null) {
@@ -109,9 +131,14 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
         await widget.apiService.updateStoryChapter(_chapterId!, payload);
       }
 
+      _submissionStatus = nextSubmissionStatus;
+      _scheduledFor = nextScheduledFor;
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Chapter saved to database')),
+          SnackBar(
+            content: Text(successMessage ?? 'Chapter saved to database'),
+          ),
         );
       }
     } catch (_) {
@@ -125,6 +152,167 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
         setState(() => _isSaving = false);
       }
     }
+  }
+
+  Future<void> _editChapterNotes() async {
+    final controller = TextEditingController(text: _chapterNotes);
+    final updatedNotes = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Chapter Notes',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                hintText: 'Add internal notes for this chapter...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context, controller.text.trim()),
+                child: const Text('Save Notes'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    controller.dispose();
+    if (updatedNotes == null) return;
+
+    setState(() => _chapterNotes = updatedNotes);
+    await _saveChapter(successMessage: 'Chapter notes updated');
+  }
+
+  Future<void> _submitChapter() async {
+    await _saveChapter(
+      submissionStatus: 'submitted',
+      scheduledFor: null,
+      successMessage: 'Chapter submitted',
+    );
+  }
+
+  Future<void> _scheduleChapterSubmission() async {
+    final now = DateTime.now();
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: _scheduledFor ?? now,
+      firstDate: now,
+      lastDate: DateTime(now.year + 2),
+    );
+    if (pickedDate == null || !mounted) return;
+
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: _scheduledFor != null
+          ? TimeOfDay.fromDateTime(_scheduledFor!)
+          : TimeOfDay.fromDateTime(now.add(const Duration(hours: 1))),
+    );
+    if (pickedTime == null) return;
+
+    final scheduled = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+
+    await _saveChapter(
+      submissionStatus: 'scheduled',
+      scheduledFor: scheduled,
+      successMessage: 'Chapter scheduled for submission',
+    );
+  }
+
+  Future<void> _showRevisions() async {
+    if (_chapterId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Save this chapter first to view revisions')),
+      );
+      return;
+    }
+
+    final revisions = await widget.apiService.fetchStoryChapterRevisions(
+      _chapterId!,
+    );
+    if (!mounted) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: revisions.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('No revisions yet.'),
+              )
+            : ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemBuilder: (context, index) {
+                  final revision = revisions[index];
+                  final createdAt = DateTime.tryParse(
+                    revision['created_at']?.toString() ?? '',
+                  );
+                  final subtitleParts = <String>[
+                    revision['submission_status']?.toString() ?? 'draft',
+                    if (createdAt != null)
+                      '${createdAt.year}-${createdAt.month.toString().padLeft(2, '0')}-${createdAt.day.toString().padLeft(2, '0')} ${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}',
+                  ];
+                  return ListTile(
+                    leading: const Icon(Icons.history_rounded),
+                    title: Text(revision['title']?.toString() ?? 'Untitled'),
+                    subtitle: Text(subtitleParts.join(' • ')),
+                  );
+                },
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemCount: revisions.length,
+              ),
+      ),
+    );
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'submitted':
+        return 'Submitted';
+      case 'scheduled':
+        return 'Scheduled';
+      default:
+        return 'Draft';
+    }
+  }
+
+  String _scheduledLabel() {
+    final scheduledFor = _scheduledFor;
+    if (scheduledFor == null) return 'Not scheduled';
+    final localizations = MaterialLocalizations.of(context);
+    return '${localizations.formatShortDate(scheduledFor)} ${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(scheduledFor))}';
   }
 
   Future<void> _deleteChapter() async {
@@ -208,6 +396,38 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.sticky_note_2_outlined),
+              title: const Text('Add Chapter Notes'),
+              onTap: () async {
+                Navigator.pop(context);
+                await _editChapterNotes();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.publish_outlined),
+              title: const Text('Submit Chapter'),
+              onTap: () async {
+                Navigator.pop(context);
+                await _submitChapter();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.history_rounded),
+              title: const Text('Revisions'),
+              onTap: () async {
+                Navigator.pop(context);
+                await _showRevisions();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.schedule_rounded),
+              title: const Text('Schedule Submission'),
+              onTap: () async {
+                Navigator.pop(context);
+                await _scheduleChapterSubmission();
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.delete_outline_rounded, color: Colors.red),
               title: const Text(
                 'Delete Chapter',
@@ -279,6 +499,42 @@ class _EditChapterScreenState extends State<EditChapterScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.brand.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  _statusLabel(_submissionStatus),
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppTheme.brand,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _scheduledLabel(),
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.muted,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                         const Padding(
                           padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
                           child: Text(

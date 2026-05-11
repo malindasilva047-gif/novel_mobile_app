@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/models/app_bootstrap.dart';
 import '../../data/services/api_service.dart';
+import '../../data/services/auth_service.dart';
 import 'discover_screen.dart';
 import 'library_screen.dart';
 import 'login_screen.dart';
@@ -20,17 +21,18 @@ class RootShell extends StatefulWidget {
 
 class _RootShellState extends State<RootShell> {
   final ApiService _apiService = const ApiService();
+  late final AuthService _authService = AuthService(apiService: _apiService);
   int _selectedIndex = 1;
   AppBootstrap? _bootstrap;
   bool _loading = true;
   String _contentVersion = '';
   Timer? _syncTimer;
-  bool _loggedIn = false;
+  AuthSession? _session;
 
   @override
   void initState() {
     super.initState();
-    _loadBootstrap();
+    _restoreSession();
     _syncTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollContentVersion());
   }
 
@@ -40,7 +42,25 @@ class _RootShellState extends State<RootShell> {
     super.dispose();
   }
 
+  Future<void> _restoreSession() async {
+    final session = await _authService.restoreSession();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _session = session;
+    });
+    if (session != null) {
+      await _loadBootstrap();
+    } else {
+      setState(() => _loading = false);
+    }
+  }
+
   Future<void> _loadBootstrap() async {
+    if (mounted) {
+      setState(() => _loading = true);
+    }
     final bootstrap = await _apiService.fetchBootstrap();
     final version = await _apiService.fetchContentVersion();
     if (!mounted) {
@@ -65,24 +85,47 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<void> _continueLogin(String method, {String? email}) async {
+    final session = method == 'google'
+        ? await _authService.signInWithGoogle()
+        : await _authService.signInWithEmail(email ?? '');
     if (!mounted) {
       return;
     }
-    setState(() => _loggedIn = true);
+    setState(() {
+      _session = session;
+    });
+    await _loadBootstrap();
+    if (!mounted) {
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          method == 'email'
-              ? 'Signed in with ${email ?? 'email'}'
-              : 'Signed in with Google',
+          session.isGoogle
+              ? 'Signed in as ${session.displayName}'
+              : 'Signed in with ${session.email}',
         ),
       ),
     );
   }
 
+  Future<void> _signOut() async {
+    await _authService.signOut();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _session = null;
+      _bootstrap = null;
+      _selectedIndex = 1;
+      _loading = false;
+      _contentVersion = '';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!_loggedIn) {
+    if (_session == null) {
       return LoginScreen(onContinue: _continueLogin);
     }
 
@@ -98,14 +141,26 @@ class _RootShellState extends State<RootShell> {
         apiService: _apiService,
         onOpenDiscover: () => setState(() => _selectedIndex = 1),
       ),
-      DiscoverScreen(data: _bootstrap!, apiService: _apiService),
+      DiscoverScreen(
+        data: _bootstrap!,
+        apiService: _apiService,
+        onOpenSupport: () {
+          setState(() => _selectedIndex = 4);
+        },
+        onChangeAccount: _signOut,
+      ),
       WriteScreen(data: _bootstrap!, apiService: _apiService),
       NotificationsScreen(
         data: _bootstrap!,
         apiService: _apiService,
         onOpenDiscover: () => setState(() => _selectedIndex = 1),
       ),
-      MoreScreen(data: _bootstrap!, apiService: _apiService),
+      MoreScreen(
+        data: _bootstrap!,
+        apiService: _apiService,
+        onSignOut: _signOut,
+        session: _session!,
+      ),
     ];
 
     return Scaffold(

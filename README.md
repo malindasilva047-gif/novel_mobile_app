@@ -42,6 +42,7 @@ Copy-Item .env.example .env
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
 - `UPLOAD_DIR`
+- `GOOGLE_CLIENT_ID` if you want backend-verified Google sign-in
 
 4. Install and run the backend.
 
@@ -142,6 +143,12 @@ Minimum backend env values to set in production:
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
 - `UPLOAD_DIR`
+
+For backend-verified Google login, also set:
+
+- `GOOGLE_CLIENT_ID`
+
+The Flutter app now sends the Google token to the backend, and the backend verifies it with Google before creating or updating the app user record.
 
 ## Real-time content updates
 

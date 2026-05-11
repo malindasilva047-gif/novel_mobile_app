@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../data/services/api_service.dart';
@@ -22,8 +25,29 @@ class _SupportScreenState extends State<SupportScreen> {
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _subjectController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
   String _issue = 'General support';
+  String _deviceType = 'Android phone';
+  String _attachmentPath = '';
   bool _submitting = false;
+
+  Future<void> _pickAttachment() async {
+    final picked = await _imagePicker.pickImage(source: ImageSource.gallery);
+    if (picked == null) {
+      return;
+    }
+
+    final payload = await widget.apiService.uploadSupportAttachment(File(picked.path));
+    final path = payload['path']?.toString() ?? '';
+    if (!mounted || path.isEmpty) {
+      return;
+    }
+
+    setState(() => _attachmentPath = path);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Attachment uploaded')),
+    );
+  }
 
   @override
   void dispose() {
@@ -55,12 +79,15 @@ class _SupportScreenState extends State<SupportScreen> {
         'issue': _issue,
         'subject': subject,
         'description': description,
+        'device_type': _deviceType,
+        'attachment_path': _attachmentPath,
       });
       if (!mounted) {
         return;
       }
       _subjectController.clear();
       _descriptionController.clear();
+      setState(() => _attachmentPath = '');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Support request submitted.')),
       );
@@ -85,6 +112,23 @@ class _SupportScreenState extends State<SupportScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: const TextField(
+              enabled: false,
+              decoration: InputDecoration(
+                hintText: 'Search',
+                prefixIcon: Icon(Icons.search_rounded),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
           Text(
             'Submit a request',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontSize: 34),
@@ -126,6 +170,64 @@ class _SupportScreenState extends State<SupportScreen> {
             maxLines: 6,
             decoration: const InputDecoration(labelText: 'Description'),
           ),
+          const SizedBox(height: 8),
+          Text(
+            'Please enter the details of your request. Please include any relevant details about your problem including the name(s) of the stories affected, chapter numbers, and any error messages you receive.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppTheme.muted,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 18),
+          DropdownButtonFormField<String>(
+            initialValue: _deviceType,
+            decoration: const InputDecoration(
+              labelText: 'What type of device are you using?',
+            ),
+            items: const [
+              DropdownMenuItem(value: 'Android phone', child: Text('Android phone')),
+              DropdownMenuItem(value: 'Android tablet', child: Text('Android tablet')),
+              DropdownMenuItem(value: 'iPhone', child: Text('iPhone')),
+              DropdownMenuItem(value: 'iPad', child: Text('iPad')),
+              DropdownMenuItem(value: 'Web browser', child: Text('Web browser')),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _deviceType = value);
+              }
+            },
+          ),
+          const SizedBox(height: 18),
+          Text(
+            'Attachments',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: _pickAttachment,
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.attach_file_rounded, color: AppTheme.brand),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _attachmentPath.isEmpty
+                          ? 'Add file or drop file here'
+                          : _attachmentPath.split('/').last,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 18),
           FilledButton(
             onPressed: _submitting ? null : _submit,
@@ -139,7 +241,7 @@ class _SupportScreenState extends State<SupportScreen> {
                       color: Colors.white,
                     ),
                   )
-                : const Text('Submit Request'),
+                : const Text('Submit'),
           ),
         ],
       ),

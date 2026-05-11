@@ -167,6 +167,24 @@ class ApiService {
     return const <String, dynamic>{};
   }
 
+  Future<Map<String, dynamic>> uploadSupportAttachment(File file) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_baseUrl/api/support/upload-attachment'),
+    );
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 15));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+
+    return const <String, dynamic>{};
+  }
+
   Future<List<Map<String, dynamic>>> fetchNotifications({String? tab}) async {
     try {
       final response = await _get(
@@ -200,6 +218,24 @@ class ApiService {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Unable to submit support request');
     }
+  }
+
+  Future<Map<String, dynamic>> verifyGoogleSignIn({
+    String? idToken,
+    String? accessToken,
+  }) async {
+    final response = await _post(
+      '/api/auth/google',
+      {
+        'id_token': idToken,
+        'access_token': accessToken,
+      },
+      timeout: const Duration(seconds: 12),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Unable to verify Google sign-in');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   Future<List<Map<String, dynamic>>> searchStories({
@@ -246,6 +282,19 @@ class ApiService {
 
   Future<void> deleteLibraryEntry(int id) async {
     await _delete('/api/library/$id', timeout: const Duration(seconds: 8));
+  }
+
+  Future<List<Map<String, dynamic>>> fetchReadingLists() async {
+    final response = await _get('/api/reading-lists');
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
+  }
+
+  Future<void> createReadingList(Map<String, dynamic> payload) async {
+    await _post('/api/reading-lists', payload, timeout: const Duration(seconds: 8));
   }
 
   Future<List<Map<String, dynamic>>> fetchWriterStories() async {
@@ -333,6 +382,21 @@ class ApiService {
       ),
       const Duration(seconds: 8),
     );
+  }
+
+  Future<List<Map<String, dynamic>>> fetchStoryChapterRevisions(
+    int chapterId,
+  ) async {
+    final response = await _requestWithHostFallback(
+      (baseUrl) =>
+          http.get(Uri.parse('$baseUrl/api/write/chapters/$chapterId/revisions')),
+      const Duration(seconds: 8),
+    );
+    if (response.statusCode != 200) {
+      return const <Map<String, dynamic>>[];
+    }
+    final payload = jsonDecode(response.body) as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(payload['items'] as List<dynamic>);
   }
 
   Future<void> deleteStoryChapter(int chapterId) async {

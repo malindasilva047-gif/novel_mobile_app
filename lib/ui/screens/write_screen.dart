@@ -264,6 +264,15 @@ class _ManageStoriesTab extends StatelessWidget {
 
                 final stories = (snapshot.data ?? <Map<String, dynamic>>[])
                     .where((story) {
+                      final statusText =
+                          story['status_text']?.toString().toLowerCase() ?? '';
+                      final isDraft = statusText.contains('draft');
+                      if (storySubTabs.index == 0 && isDraft) {
+                        return false;
+                      }
+                      if (storySubTabs.index == 1 && !isDraft) {
+                        return false;
+                      }
                       if (query.trim().isEmpty) return true;
                       final q = query.trim().toLowerCase();
                       final title =
@@ -355,6 +364,8 @@ class _StoryListCard extends StatelessWidget {
     final author = story['author']?.toString() ?? '';
     final description = story['description']?.toString() ?? '';
     final genre = story['genre']?.toString() ?? '';
+    final statusText = story['status_text']?.toString().trim() ?? 'Draft';
+    final isDraft = statusText.toLowerCase().contains('draft');
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -419,22 +430,49 @@ class _StoryListCard extends StatelessWidget {
                 if (genre.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.brand.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        genre,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppTheme.brand,
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.brand.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            genre,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.brand,
+                            ),
+                          ),
                         ),
-                      ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isDraft
+                                ? const Color(0xFFF7E1B5)
+                                : const Color(0xFFDCEFD9),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            isDraft ? 'Draft' : statusText,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isDraft
+                                  ? const Color(0xFF8A5A00)
+                                  : const Color(0xFF24613A),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
               ],

@@ -319,6 +319,42 @@ def run_startup_migrations() -> dict[str, int]:
         )
         result["tables_added"] += 1
 
+    cursor.execute("SHOW COLUMNS FROM chapters LIKE 'notes'")
+    if cursor.fetchone() is None:
+        cursor.execute("ALTER TABLE chapters ADD COLUMN notes TEXT NULL AFTER content")
+        result["columns_added"] += 1
+
+    cursor.execute("SHOW COLUMNS FROM chapters LIKE 'submission_status'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            "ALTER TABLE chapters ADD COLUMN submission_status VARCHAR(40) NOT NULL DEFAULT 'draft' AFTER notes"
+        )
+        result["columns_added"] += 1
+
+    cursor.execute("SHOW COLUMNS FROM chapters LIKE 'scheduled_for'")
+    if cursor.fetchone() is None:
+        cursor.execute("ALTER TABLE chapters ADD COLUMN scheduled_for DATETIME NULL AFTER submission_status")
+        result["columns_added"] += 1
+
+    cursor.execute("SHOW TABLES LIKE 'chapter_revisions'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE chapter_revisions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chapter_id INT NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                content LONGTEXT NOT NULL,
+                notes TEXT NULL,
+                submission_status VARCHAR(40) NOT NULL DEFAULT 'draft',
+                scheduled_for DATETIME NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_revision_chapter FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+            )
+            """
+        )
+        result["tables_added"] += 1
+
     cursor.execute("SHOW TABLES LIKE 'support_requests'")
     if cursor.fetchone() is None:
         cursor.execute(
@@ -330,6 +366,8 @@ def run_startup_migrations() -> dict[str, int]:
                 issue VARCHAR(120) NOT NULL,
                 subject VARCHAR(255) NOT NULL,
                 description TEXT NOT NULL,
+                device_type VARCHAR(120) NOT NULL DEFAULT '',
+                attachment_path TEXT NULL,
                 status VARCHAR(40) NOT NULL DEFAULT 'open',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -337,6 +375,36 @@ def run_startup_migrations() -> dict[str, int]:
             """
         )
         result["tables_added"] += 1
+
+    cursor.execute("SHOW TABLES LIKE 'app_users'")
+    if cursor.fetchone() is None:
+        cursor.execute(
+            """
+            CREATE TABLE app_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) NOT NULL UNIQUE,
+                provider VARCHAR(40) NOT NULL DEFAULT 'google',
+                provider_subject VARCHAR(255) NOT NULL,
+                display_name VARCHAR(255) NOT NULL,
+                photo_url TEXT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                last_login_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        result["tables_added"] += 1
+
+    support_columns = {
+        "device_type": "ALTER TABLE support_requests ADD COLUMN device_type VARCHAR(120) NOT NULL DEFAULT ''",
+        "attachment_path": "ALTER TABLE support_requests ADD COLUMN attachment_path TEXT NULL",
+    }
+
+    for column, alter_sql in support_columns.items():
+        cursor.execute(f"SHOW COLUMNS FROM support_requests LIKE '{column}'")
+        if cursor.fetchone() is None:
+            cursor.execute(alter_sql)
+            result["columns_added"] += 1
 
     book_columns = {
         "primary_genre": "ALTER TABLE books ADD COLUMN primary_genre VARCHAR(80) NOT NULL DEFAULT ''",

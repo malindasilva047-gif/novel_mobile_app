@@ -7,16 +7,21 @@ import '../../data/models/app_bootstrap.dart';
 import '../../data/services/api_service.dart';
 import 'explore_screen.dart';
 import 'reader_screen.dart';
+import 'support_screen.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({
     super.key,
     required this.data,
     required this.apiService,
+    required this.onOpenSupport,
+    required this.onChangeAccount,
   });
 
   final AppBootstrap data;
   final ApiService apiService;
+  final VoidCallback onOpenSupport;
+  final Future<void> Function() onChangeAccount;
 
   @override
   State<DiscoverScreen> createState() => _DiscoverScreenState();
@@ -91,6 +96,56 @@ class _DiscoverScreenState extends State<DiscoverScreen>
                   icon: const Icon(Icons.search_rounded, size: 28),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
+                ),
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert_rounded, size: 24),
+                  onSelected: (value) async {
+                    if (value == 'support') {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => SupportScreen(
+                            apiService: widget.apiService,
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (value == 'change_account') {
+                      final approved = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          content: const Text(
+                            'Are you sure you want to log out?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('NO'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(true),
+                              child: const Text('YES'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (approved == true) {
+                        await widget.onChangeAccount();
+                      }
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem<String>(
+                      value: 'support',
+                      child: Text('Contact support'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'change_account',
+                      child: Text('Change accounts'),
+                    ),
+                  ],
                 ),
               ],
             ),
